@@ -13,23 +13,25 @@
 
 <br>
 
-<a href="https://github.com/Visxoz/lily/releases/latest"><img src="docs/download.svg" width="300" alt="Download for Windows"></a>
-
-<sub>On an iPhone? There's <a href="https://github.com/Visxoz/Lily-ios">Lily for iPhone</a> too.</sub>
+<a href="https://github.com/Visxoz/lily/releases/latest"><img src="docs/download.svg" width="300" alt="Download for Windows"></a>&nbsp;&nbsp;<a href="https://github.com/Visxoz/Lily-ios"><img src="docs/iphone.svg" width="300" alt="Lily for iPhone"></a>
 
 <br>
 
-<img src="docs/hero.png" width="100%" alt="Lily in the black look, with an artist page, and synced lyrics tinted from the artwork">
+<img src="docs/hero.png" width="100%" alt="Lily in the dark look on an album page tinted purple from its cover, with the playing song's synced lyrics beside it">
 
-<sub>Black look · lyrics that follow the song, tinted from its artwork</sub>
+<sub>Dark look · pages and lyrics tinted from the artwork</sub>
 
 <br><br>
 
 <img src="docs/stats.svg" width="100%" alt="34 MB, one exe. 0.1% CPU while a song plays. 0 MB of GPU memory once minimised. 256 kbps Opus with YouTube Premium.">
 
+<br>
+
+**[Why Lily](#why-lily)** · **[Full screen](#full-screen)** · **[Offline](#take-it-offline)** · **[Looks](#make-it-yours)** · **[Sound](#sounds-as-good-as-youtube-gets)** · **[Lightweight](#light-enough-to-forget-about)** · **[Install](#install)** · **[Your account](#your-account)** · **[Under the hood](#under-the-hood)**
+
 </div>
 
-<br>
+## Why Lily
 
 <table>
 <tr>
@@ -42,7 +44,7 @@
 <td width="33%" valign="top">
 
 ### Weighs nothing
-One 34 MB exe, drawn by the GPU, using 0.1% of the CPU while it plays. Minimised, it hands back its GPU memory and drops to about 34 MB of RAM.
+A single exe, drawn by the GPU, using 0.1% of the CPU while it plays. Minimised, it hands back its GPU memory and gets by on about 34 MB of RAM.
 
 </td>
 <td width="33%" valign="top">
@@ -56,7 +58,7 @@ Pure black and orchid out of the box, or dark or light, in eight other accents i
 <td width="33%" valign="top">
 
 ### All of YouTube Music
-Radio, autoplay, Smart Shuffle, repeat, history and search with recent searches. Artist pages carry the whole discography.
+Your Home feed, Explore, radio, autoplay, Smart Shuffle, repeat, history and search with recent searches. Artist pages carry the whole discography.
 
 </td>
 <td width="33%" valign="top">
@@ -67,24 +69,50 @@ Synced lyrics you can click to jump to, beside the page or full screen. A queue 
 </td>
 <td width="33%" valign="top">
 
+### Your library
+Your playlists in the sidebar, pinned how you like. Reorder, rename and share your own, save albums and playlists, and subscribe to artists.
+
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+
+### Offline too
+Download songs, albums and playlists to play without a connection, and play your own music folders (FLAC, MP3, Opus and more) beside them.
+
+</td>
+<td width="33%" valign="top">
+
+### Stays out of the way
+A mini player that floats on top, and close to the tray to keep the music going. Reopens on the song you left, at the second you left it.
+
+</td>
+<td width="33%" valign="top">
+
 ### At home on Windows
-Media keys, the Windows media overlay, Discord, Last.fm. Reopens on the song you left, at the second you left it.
+Media keys and the Windows media overlay, Discord and Last.fm, the output device of your choice, and pausing when you unplug your headphones.
 
 </td>
 </tr>
 </table>
 
-## Also on iPhone
-
-<a href="https://github.com/Visxoz/Lily-ios"><img src="docs/ios.svg" width="100%" alt="Lily for iPhone: the same Lily, built again in Swift and SwiftUI, free for iOS 26 and later"></a>
-
-[Lily for iPhone](https://github.com/Visxoz/Lily-ios) is Lily built again in Swift and SwiftUI, on Apple's own audio engine, with the same orchid look, Premium streams, gapless playback, crossfade, equaliser and synced lyrics. It adds offline downloads, the lock screen and Control Center, your AirPods and a Liquid Glass tab bar. Add it to AltStore, SideStore or Feather for updates as they come, or grab it from its [releases](https://github.com/Visxoz/Lily-ios/releases/latest).
-
 ## Full screen
 
 <img src="docs/fullscreen.png" width="100%" alt="The full-screen player: the artwork, its title and the next song beside large synced lyrics, over the artwork's colours">
 
-The button beside the queue's takes the window full screen: the artwork and its lyrics over the artwork's own colours, with the queue a click away in a drawer. <kbd>Esc</kbd> leaves.
+The full-screen button in the player bar puts the artwork and its lyrics over the artwork's own colours, with the queue a click away in a drawer. <kbd>Esc</kbd> leaves.
+
+## Smart Shuffle and the queue
+
+<img src="docs/queue.png" width="100%" alt="The queue beside an album page, with two Smart Shuffle picks marked with a sparkle among the user's own songs">
+
+Press shuffle twice for Smart Shuffle, and Lily slips a song you might like in after every three or four of your own, marked with a sparkle. Turn it off and they're taken out again. Drag the queue into order, pick several songs with <kbd>Ctrl</kbd>- and <kbd>Shift</kbd>-click to play next or remove together, and, signed in, save the lot as a playlist.
+
+## Take it offline
+
+<img src="docs/downloads.png" width="100%" alt="The Downloads page, listing downloaded songs from several albums">
+
+Download a song, an album or a playlist from its menu or its header, and from then on it plays from the file wherever it appears, with Downloads keeping them together. Add your own music folders in **Settings ▸ Library** and they play from **Local files**, in FLAC, MP3, Opus and more.
 
 ## Make it yours
 
@@ -116,6 +144,10 @@ Lily starts in pure black with its own orchid. Pick another look and accent in *
 <td width="50%"><img src="docs/quality.svg" alt="Audio quality: Low about 50 kbps, Normal about 130 kbps, High up to 256 kbps with Premium"></td>
 <td width="50%"><img src="docs/equaliser.png" alt="The equaliser with the Bass boost preset"></td>
 </tr>
+<tr>
+<td width="50%"><img src="docs/settings-playback.png" alt="Playback settings: audio quality, speed, crossfade, pause when unplugged and autoplay"></td>
+<td width="50%"><img src="docs/settings-sound.png" alt="Sound settings: output device, normalise volume, equaliser, crossfeed, mono and balance"></td>
+</tr>
 </table>
 
 | Feature | What it does |
@@ -125,6 +157,8 @@ Lily starts in pure black with its own orchid. Pick another look and accent in *
 | **Crossfade** | Fades each song into the next over 1 to 12 seconds (6 by default), cutting the silence at the joins. An album played in order still runs straight on, and skipping never fades. |
 | **Equaliser** | Ten bands from 31 Hz to 16 kHz, ±12 dB each, with presets: Flat, Bass boost, Treble boost, Vocal, Rock, Electronic and Acoustic. Boosting turns the rest down to leave headroom. |
 | **Normalise volume** | Plays every track at a similar loudness, from YouTube's own measurement: loud ones turned down and quiet ones up, at Normal or a Quiet level 6 dB lower, with a limiter so nothing clips. |
+| **For headphones** | Crossfeed blends a little of each side into the other, as speakers do. Mono is there for one earbud, and a balance slider for everything else. |
+| **Speed** | From 0.8× to 1.3×, like a record: the pitch moves with it. |
 | **No clicks, no drop-outs** | Pausing ramps the sound down, and seeks and skips fade in. Unplug your headphones and the music pauses, or with **Pause when unplugged** off, carries on through the next device. |
 
 ## Light enough to forget about
@@ -132,6 +166,10 @@ Lily starts in pure black with its own orchid. Pick another look and accent in *
 <img src="docs/minimised.svg" width="100%" alt="Window open vs minimised, while a song plays: RAM 91 to 34 MB, committed memory 239 to 40 MB, GPU memory 125 to 0 MB, CPU 0.13 to 0.03 percent">
 
 When you minimise it, the app throws away its GPU surface and drawing caches, and builds them again the moment you bring it back. Pause the music and the audio device stops too, so the app sleeps and Windows can as well.
+
+<p align="center"><img src="docs/mini.png" width="360" alt="The mini player: artwork, title and artist, previous, pause and next buttons, an expand button, and a progress line"></p>
+
+Closing the window leaves the music playing from the system tray (unless you turn **Close to the system tray** off), and the tray's menu has the controls. The mini player, from the player bar or the tray, is a small window with the artwork and controls that stays on top of the others; double-click it to bring Lily back.
 
 <details>
 <summary><b>How these were measured</b></summary>
@@ -173,10 +211,39 @@ Put it anywhere and run it. Nothing is installed.
 </tr>
 </table>
 
-Both keep themselves up to date. When a new version is out, a dot appears on the account button, and **Settings ▸ About ▸ Updates** installs it and restarts. Every download is checked against the release's SHA-256 checksums first.
+Both keep themselves up to date. When a new version is out, a card above the player bar offers it and a dot appears on the account button; **Settings ▸ About ▸ Updates** installs it too, and restarts. Every download is checked against the release's SHA-256 checksums first.
 
 > [!NOTE]
 > The app isn't code-signed yet, so SmartScreen may say it "protected your PC": choose **More info**, then **Run anyway**. If Smart App Control blocks it, right-click the file, choose **Properties**, tick **Unblock**, and run it again.
+
+## Your account
+
+Lily works without an account. Sign in and it becomes your YouTube Music: your playlists and Liked music in the sidebar, your albums and artists in Library, your own feed on Home, and what you play here counting towards your history and recommendations.
+
+To sign in, choose **Sign in** in the sidebar (or in **Settings ▸ Account**), then **Sign in with Google**, and sign in on Google's own page. The window closes by itself once you're in.
+
+| Signed in, you can | How |
+| --- | --- |
+| **Pin playlists** | Right-click one in the sidebar and choose **Pin to top**. |
+| **Edit your own playlists** | Drag songs into a new order or remove them on the playlist's page, and rename, share or delete it from the header's menu. Making one public or unlisted needs a YouTube channel on the account. |
+| **Save and subscribe** | Save any other album or playlist to your library from its header, and subscribe to artists. |
+| **Rate songs** | Like and dislike with the thumbs beside the playing song, or from a song's menu. |
+| **Keep plays to yourself** | Turn off **YouTube history** in **Settings ▸ Account**, and what you play here stays out of your account's history. |
+
+Discord's status and Last.fm scrobbling don't need an account; both are in **Settings ▸ Account** too.
+
+The sign-in is stored encrypted for your Windows account only, with DPAPI. Signing in uses Microsoft Edge WebView2, which comes with Windows 11 and most Windows 10 PCs.
+
+<details>
+<summary><b>Prefer pasting cookies?</b></summary>
+<br>
+
+Open music.youtube.com in a private browser window and sign in. Copy either a cookies.txt export or the `Cookie` request header from the developer tools (Network tab). In Lily's sign-in window, choose **Paste cookies instead**, paste them, choose **Sign in with cookies**, and close the private window. YouTube rotates the cookies of sessions that stay open.
+
+</details>
+
+> [!WARNING]
+> Lily is an unofficial client. It uses YouTube's undocumented API, which is against YouTube's terms of service. Google could ask you to confirm you're not a bot or sign the session out, and could in principle restrict the account. A separate account is the safest choice.
 
 ## Shortcuts
 
@@ -188,28 +255,15 @@ Both keep themselves up to date. When a new version is out, a dot appears on the
 | <kbd>Ctrl</kbd> <kbd>B</kbd> | Collapse or expand the library sidebar |
 | <kbd>Alt</kbd> <kbd>←</kbd> / <kbd>Alt</kbd> <kbd>→</kbd> | Back or forward |
 | <kbd>Delete</kbd> | Remove the songs picked in the queue |
-| <kbd>Esc</kbd> | Close a dialog, clear the queue's selection, or leave full screen |
+| <kbd>Esc</kbd> | Close a dialog or search, clear the queue's selection, or leave full screen |
 
-Right-click a song to play it next, add it to the queue, start a radio, like it, save it to a playlist, or go to its artist or album. In the queue, <kbd>Ctrl</kbd>-click and <kbd>Shift</kbd>-click pick several songs at once.
+Right-click a song to play it next, add it to the queue, start a radio, download it, or go to its artist or album, and signed in, to like it or save it to a playlist. **Copy link** is in the menus of songs, the queue, cards, page headers, the player bar and the sidebar's playlists. In the queue, <kbd>Ctrl</kbd>-click and <kbd>Shift</kbd>-click pick several songs at once. The mouse wheel moves the seek bar and volume.
 
-## Your account
+## Also on iPhone
 
-Choose **Sign in** in the sidebar (or in **Settings ▸ Account**), then **Sign in with Google**, and sign in on Google's own page. The window closes by itself once you're in. Your playlists and Liked music appear in the sidebar, where a right-click pins one to the top, your albums and artists in Library, Home becomes your own feed, and what you play here counts towards your YouTube Music history and recommendations.
+<a href="https://github.com/Visxoz/Lily-ios"><img src="docs/ios.svg" width="100%" alt="Lily for iPhone: the same Lily, built again in Swift and SwiftUI, free for iOS 26 and later"></a>
 
-Your own playlists can be edited from their page: drag songs into a new order, remove them, or rename, share or delete the playlist from the header's menu (making one public or unlisted needs a YouTube channel on the account). Any other album or playlist can be saved to your library from its header, and artists subscribed to. **Copy link** is in the menus of songs, the queue, cards, page headers, the player bar and the sidebar's playlists.
-
-The sign-in is stored encrypted for your Windows account only, with DPAPI. Signing in uses Microsoft Edge WebView2, which comes with Windows 11 and most Windows 10 PCs.
-
-<details>
-<summary><b>Prefer pasting cookies?</b></summary>
-<br>
-
-Open music.youtube.com in a private browser window and sign in. Copy either a cookies.txt export or the `Cookie` request header from the developer tools (Network tab), paste it under **Paste cookies instead**, and close the private window. YouTube rotates the cookies of sessions that stay open.
-
-</details>
-
-> [!WARNING]
-> Lily is an unofficial client. It uses YouTube's undocumented API, which is against YouTube's terms of service. Google could ask you to confirm you're not a bot or sign the session out, and could in principle restrict the account. A separate account is the safest choice.
+[Lily for iPhone](https://github.com/Visxoz/Lily-ios) is Lily built again in Swift and SwiftUI, on Apple's own audio engine, with the same orchid look, Premium streams, gapless playback, crossfade, equaliser and synced lyrics. It adds the lock screen and Control Center, your AirPods and a Liquid Glass tab bar. Add it to AltStore, SideStore or Feather for updates as they come, or grab it from its [releases](https://github.com/Visxoz/Lily-ios/releases/latest).
 
 ## Under the hood
 
@@ -240,13 +294,13 @@ flowchart LR
 | Opus | libopus 1.3.1, as Rust ([unsafe-libopus](https://crates.io/crates/unsafe-libopus)) |
 | Audio output | [cpal](https://github.com/RustAudio/cpal), through WASAPI |
 | Interface | [Slint](https://slint.dev), drawn by Skia on the GPU through Direct3D 12 |
-| Networking | reqwest over Windows SChannel and HTTP/2, on Tokio |
+| Networking | reqwest over Windows Schannel and HTTP/2, on Tokio |
 | Google sign-in | WebView2 through [wry](https://github.com/tauri-apps/wry), only while signing in |
 | Media keys | [souvlaki](https://github.com/Sinono3/souvlaki) |
 
 Most YouTube clients get stream URLs that YouTube's player JavaScript has to unscramble. The visionOS client gets plain ones, so the app asks as that client and needs no JavaScript engine, falling back to Android VR and iOS if YouTube changes it. A daily check flags it when one of them stops working. With Premium, the app unscrambles the web player's URLs itself, in a short-lived QuickJS context with a cut-down copy of the player.
 
-The app talks only to YouTube's hosts, plus GitHub for updates and Last.fm if you connect it, each checked against an allowlist. It keeps everything in `%APPDATA%\Lily`, and moves the folder of versions named ytm-native there on its first start.
+The app talks to YouTube's hosts, checked against an allowlist, plus GitHub for updates and Last.fm if you connect it. It follows a proxy set by hand in Windows' settings, or one of your own in **Settings ▸ About**. It keeps everything in `%APPDATA%\Lily`, and moves the folder of versions named ytm-native there on its first start.
 
 </details>
 
@@ -268,9 +322,9 @@ cargo test
 
 The patches:
 
-- `i-slint-common` memory-maps the fallback fonts instead of reading them into memory.
-- `i-slint-renderer-skia` draws those fonts from the mappings, and drops its GPU surface and caches while the window is minimised.
-- `rustypipe` opens playlists the signed-in user owns, fetches visitor IDs from YouTube's API rather than the Music home page, and returns an error instead of crashing when YouTube refuses one.
+- `i-slint-common` memory-maps the fallback fonts instead of reading them into the heap.
+- `i-slint-renderer-skia` drops its GPU surface and caches while the window is minimised, and asks wgpu for far fewer bindings, about 30 MB less memory while the window shows.
+- `rustypipe` opens the signed-in user's own playlists and mixes, reads what editing and the library need (whether a playlist is yours, whether an album or playlist is saved, whether you're subscribed to an artist), takes in the fresh cookies YouTube sends, notices a session that has ended, fetches visitor IDs from YouTube's API rather than the Music home page, and retries or backs off when YouTube refuses requests.
 
 Release builds write warnings, errors and crashes to `%APPDATA%\Lily\lily.log`, with every URL cut down to its host; `YTM_LOG=info` (or `debug`) logs more. A request that crashes fails on its own rather than closing the app.
 
