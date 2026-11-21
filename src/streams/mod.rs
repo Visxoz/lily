@@ -2,12 +2,18 @@
 //! get plain, unscrambled URLs. They are tried in order, as YouTube tends to
 //! break one client at a time. Premium streams go through `premium`.
 
+mod head;
 pub mod premium;
+mod response;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+pub use head::warm;
+use response::parse;
+pub(crate) use response::{Format, PlayerResponse, best_audio, parse_response};
 
 const PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
@@ -131,197 +137,6 @@ pub struct ResolvedStream {
     pub head: Arc<OnceLock<Vec<u8>>>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PlayerResponse {
-    playability_status: PlayabilityStatus,
-    streaming_data: Option<StreamingData>,
-    player_config: Option<PlayerConfig>,
-}
-
-#[derive(Deserialize)]
-struct PlayabilityStatus {
-    status: String,
-    reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StreamingData {
-    #[serde(default)]
-    adaptive_formats: Vec<Format>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PlayerConfig {
-    audio_config: Option<AudioConfig>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioConfig {
-    loudness_db: Option<f32>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Format {
-    pub itag: u32,
-    pub url: Option<String>,
-    /// `s`, `sp` and `url`, when the URL is scrambled.
-    pub signature_cipher: Option<String>,
-    mime_type: String,
-    pub bitrate: u64,
-    content_length: Option<String>,
-    approx_duration_ms: Option<String>,
-    loudness_db: Option<f32>,
-    #[serde(default)]
-    is_drc: bool,
-    audio_track: Option<AudioTrack>,
-    audio_channels: Option<u32>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-struct AudioTrack {
-    #[serde(default)]
-    audio_is_default: bool,
-}
-
-impl Format {
-    fn is_opus(&self) -> bool {
-        self.mime_type.starts_with("audio/webm") && self.mime_type.contains("opus")
-    }
-
-    /// AAC-LC only: Symphonia decodes no other AAC, so HE-AAC (`mp4a.40.5`,
-    /// itag 139, the only AAC under the Low cap) fails or plays muffled. The
-    /// quotes keep out `mp4a.40.29`.
-    fn is_aac(&self) -> bool {
-        self.mime_type.starts_with("audio/mp4") && self.mime_type.contains("\"mp4a.40.2\"")
-    }
-
-    fn has_url(&self) -> bool {
-        self.url.is_some() || self.signature_cipher.is_some()
-    }
-
-    /// Not a dynamic-range compressed variant, dubbed track or surround
-    /// mix, which the decoders can't play.
-    fn plain(&self) -> bool {
-        !self.is_drc
-            && self.audio_channels.is_none_or(|c| c <= 2)
-            && self.audio_track.as_ref().is_none_or(|t| t.audio_is_default)
-    }
-}
-
-impl PlayerResponse {
-    pub fn audio_formats(&self) -> &[Format] {
-        self.streaming_data
-            .as_ref()
-            .map_or(&[], |s| s.adaptive_formats.as_slice())
-    }
-
-    fn loudness_db(&self) -> Option<f32> {
-        self.player_config
-            .as_ref()
-            .and_then(|c| c.audio_config.as_ref())
-            .and_then(|a| a.loudness_db)
-    }
-
-    pub fn stream(
-        &self,
-        format: &Format,
-        url: String,
-        user_agent: &str,
-        premium: bool,
-    ) -> ResolvedStream {
-        let (mime, codec) = if format.is_opus() {
-            ("audio/webm", "Opus")
-        } else {
-            ("audio/mp4", "AAC")
-        };
-        ResolvedStream {
-            url,
-            size: format
-                .content_length
-                .as_deref()
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(0),
-            mime: mime.into(),
-            headers: vec![("User-Agent".into(), user_agent.into())],
-            codec: codec.into(),
-            bitrate_kbps: format.bitrate as f64 / 1000.0,
-            duration: format
-                .approx_duration_ms
-                .as_deref()
-                .and_then(|ms| ms.parse::<f64>().ok())
-                .map(|ms| ms / 1000.0),
-            loudness_db: format.loudness_db.or_else(|| self.loudness_db()),
-            premium,
-            itag: format.itag,
-            file: None,
-            client: None,
-            head: Arc::default(),
-        }
-    }
-}
-
-/// How much of the next stream `warm` fetches.
-const HEAD_LEN: usize = 64 * 1024;
-
-/// Fetches the likely next stream's first bytes, as googlevideo's first answer
-/// for a rarely played song can take over half a second, and keeps them for
-/// its download to start from. Blocking, and on the download's client so the
-/// connection is pooled for it.
-pub fn warm(stream: &ResolvedStream) {
-    if !crate::http::allowed(&stream.url) {
-        return;
-    }
-    match first_bytes(&stream.url, &stream.headers) {
-        Ok(bytes) if head_fits(bytes.len(), stream.size) => {
-            let _ = stream.head.set(bytes);
-        }
-        Ok(_) => log::debug!("the next stream's first bytes do not fit its length"),
-        Err(e) => log::debug!("could not warm the next stream: {e}"),
-    }
-}
-
-/// Whether `len` bytes are the whole first range of a stream of `size`, as
-/// the download carries on after them. One of unknown size is downloaded
-/// without ranges, so from its start.
-fn head_fits(len: usize, size: u64) -> bool {
-    size > 0 && len as u64 == size.min(HEAD_LEN as u64)
-}
-
-/// A stream's first bytes, from an answer that starts at its first byte.
-/// Blocking, so never call it on Tokio.
-fn first_bytes(url: &str, headers: &[(String, String)]) -> Result<Vec<u8>, String> {
-    let mut request = crate::http::blocking_client()
-        .get(url)
-        .header(reqwest::header::RANGE, format!("bytes=0-{}", HEAD_LEN - 1));
-    for (name, value) in headers {
-        request = request.header(name, value);
-    }
-    let response = request
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| e.without_url().to_string())?;
-    // Anything else may be the whole song, too much to read for a warm-up.
-    let from_start = response
-        .headers()
-        .get(reqwest::header::CONTENT_RANGE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|r| r.starts_with("bytes 0-"));
-    let short = response
-        .content_length()
-        .is_some_and(|n| n <= HEAD_LEN as u64);
-    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT || !from_start || !short {
-        return Err("the answer is not the stream's first bytes".into());
-    }
-    let bytes = response.bytes().map_err(|e| e.without_url().to_string())?;
-    Ok(bytes.to_vec())
-}
-
 /// With `itag`, that format only, so a download can carry on from another
 /// client's URL. The first client's error is reported when none works, as
 /// it is the usual one.
@@ -400,182 +215,10 @@ async fn resolve_with(
     })
 }
 
-/// Parses a player response, failing with YouTube's reason if unplayable.
-pub(crate) fn parse_response(json: &str) -> Result<PlayerResponse, String> {
-    let response: PlayerResponse =
-        serde_json::from_str(json).map_err(|e| format!("unexpected player response: {e}"))?;
-    if response.playability_status.status != "OK" {
-        return Err(response
-            .playability_status
-            .reason
-            .clone()
-            .unwrap_or_else(|| format!("not playable ({})", response.playability_status.status)));
-    }
-    Ok(response)
-}
-
-/// The best plain-URL stream of a player response, or with `itag`, that
-/// one. A client that answers with scrambled URLs only counts as having none.
-fn parse(
-    json: &str,
-    user_agent: &str,
-    max_kbps: Option<u64>,
-    itag: Option<u32>,
-) -> Result<ResolvedStream, String> {
-    let response = parse_response(json)?;
-    let formats = response.audio_formats();
-    let format = match itag {
-        Some(itag) => formats
-            .iter()
-            .find(|f| f.itag == itag && f.url.is_some() && f.plain()),
-        None => best_audio(formats, max_kbps),
-    }
-    .ok_or("no playable audio stream")?;
-    let url = format.url.clone().ok_or("no playable audio stream")?;
-    Ok(response.stream(format, url, user_agent, false))
-}
-
-/// The highest-bitrate plain Opus stream, else the best AAC. With
-/// `max_kbps`, the best within it, or the lowest there is when none fits.
-pub(crate) fn best_audio(formats: &[Format], max_kbps: Option<u64>) -> Option<&Format> {
-    let candidates = |codec: fn(&Format) -> bool| {
-        formats
-            .iter()
-            .filter(move |f| codec(f) && f.has_url() && f.plain())
-    };
-    let pick = |codec: fn(&Format) -> bool| {
-        candidates(codec)
-            .filter(|f| max_kbps.is_none_or(|kbps| f.bitrate <= kbps * 1000))
-            .max_by_key(|f| (f.bitrate, f.itag))
-            .or_else(|| candidates(codec).min_by_key(|f| f.bitrate))
-    };
-    pick(Format::is_opus).or_else(|| pick(Format::is_aac))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::head::first_bytes;
     use super::*;
-
-    fn response(formats: &str) -> String {
-        format!(
-            r#"{{"playabilityStatus":{{"status":"OK"}},
-                "streamingData":{{"adaptiveFormats":[{formats}]}},
-                "playerConfig":{{"audioConfig":{{"loudnessDb":-2.5}}}}}}"#
-        )
-    }
-
-    const AAC: &str = r#"{"itag":140,"url":"https://a/140","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"",
-        "bitrate":137064,"contentLength":"5983881","approxDurationMs":"369626"}"#;
-    const OPUS: &str = r#"{"itag":251,"url":"https://a/251","mimeType":"audio/webm; codecs=\"opus\"",
-        "bitrate":146460,"contentLength":"6214234","approxDurationMs":"369641","loudnessDb":4.5}"#;
-    const OPUS_DRC: &str = r#"{"itag":251,"url":"https://a/drc","mimeType":"audio/webm; codecs=\"opus\"",
-        "bitrate":150000,"isDrc":true}"#;
-    const VIDEO: &str = r#"{"itag":248,"url":"https://a/248","mimeType":"video/webm; codecs=\"vp9\"",
-        "bitrate":2000000}"#;
-    const PREMIUM: &str = r#"{"itag":774,"signatureCipher":"s=abc&sp=sig&url=https%3A%2F%2Fa%2F774",
-        "mimeType":"audio/webm; codecs=\"opus\"","bitrate":260000}"#;
-
-    const UA: &str = "test";
-    const OPUS_LOW: &str = r#"{"itag":249,"url":"https://a/249","mimeType":"audio/webm; codecs=\"opus\"",
-        "bitrate":52000}"#;
-
-    #[test]
-    fn prefers_opus() {
-        let stream = parse(
-            &response(&[AAC, OPUS, OPUS_DRC, VIDEO].join(",")),
-            UA,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(stream.url, "https://a/251");
-        assert_eq!(stream.mime, "audio/webm");
-        assert_eq!(stream.size, 6214234);
-        assert_eq!(stream.loudness_db, Some(4.5));
-        assert_eq!(stream.duration, Some(369.641));
-        assert!(!stream.premium);
-        assert_eq!(stream.headers[0].1, UA, "downloads as the same client");
-    }
-
-    #[test]
-    fn caps_the_bitrate_for_lower_qualities() {
-        let all = response(&[AAC, OPUS, OPUS_LOW].join(","));
-        assert_eq!(
-            parse(&all, UA, Some(64), None).unwrap().url,
-            "https://a/249"
-        );
-        assert_eq!(
-            parse(&all, UA, Some(192), None).unwrap().url,
-            "https://a/251"
-        );
-        assert_eq!(
-            parse(&response(&[AAC, OPUS].join(",")), UA, Some(64), None)
-                .unwrap()
-                .url,
-            "https://a/251",
-            "nothing within the cap, so the lowest Opus"
-        );
-    }
-
-    #[test]
-    fn skips_aac_and_surround_the_decoders_refuse() {
-        const HE_AAC: &str = r#"{"itag":139,"url":"https://a/139","mimeType":"audio/mp4; codecs=\"mp4a.40.5\"",
-            "bitrate":50000}"#;
-        const SURROUND: &str = r#"{"itag":258,"url":"https://a/258","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"",
-            "bitrate":384000,"audioChannels":6}"#;
-        let all = response(&[HE_AAC, AAC, SURROUND].join(","));
-        assert_eq!(
-            parse(&all, UA, Some(64), None).unwrap().url,
-            "https://a/140"
-        );
-        assert_eq!(parse(&all, UA, None, None).unwrap().url, "https://a/140");
-    }
-
-    #[test]
-    fn falls_back_to_aac() {
-        let stream = parse(&response(&[AAC, VIDEO].join(",")), UA, None, None).unwrap();
-        assert_eq!(stream.url, "https://a/140");
-        assert_eq!(stream.codec, "AAC");
-        assert_eq!(
-            stream.loudness_db,
-            Some(-2.5),
-            "uses the player-wide loudness"
-        );
-    }
-
-    #[test]
-    fn scrambled_urls_count_as_none() {
-        assert_eq!(
-            parse(&response(PREMIUM), UA, None, None).unwrap_err(),
-            "no playable audio stream"
-        );
-    }
-
-    #[test]
-    fn picks_scrambled_premium_formats() {
-        let response = parse_response(&response(&[OPUS, PREMIUM].join(","))).unwrap();
-        let best = best_audio(response.audio_formats(), None).unwrap();
-        assert_eq!(best.itag, 774);
-        assert!(best.signature_cipher.is_some());
-    }
-
-    #[test]
-    fn carries_on_with_the_same_format_only() {
-        let all = response(&[AAC, OPUS, OPUS_LOW].join(","));
-        let stream = parse(&all, UA, None, Some(249)).unwrap();
-        assert_eq!(stream.url, "https://a/249", "not the best");
-        assert!(parse(&all, UA, None, Some(250)).is_err(), "not offered");
-        assert!(
-            parse(&response(PREMIUM), UA, None, Some(774)).is_err(),
-            "scrambled"
-        );
-        let drc_first = response(&[OPUS_DRC, OPUS].join(","));
-        assert_eq!(
-            parse(&drc_first, UA, None, Some(251)).unwrap().url,
-            "https://a/251",
-            "not the compressed variant"
-        );
-    }
 
     #[test]
     fn asks_cut_off_clients_last_refused_longest_ago_first() {
@@ -592,28 +235,6 @@ mod tests {
         assert_eq!(names(&cut), ["IOS", "VISIONOS", "ANDROID_VR"]);
         assert!(!mark(&mut cut, 2), "already marked");
         assert_eq!(cut, [0, 1, 2], "but now refused last");
-    }
-
-    #[test]
-    fn reports_unplayable_reason() {
-        let json = r#"{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in to confirm your age"}}"#;
-        assert_eq!(
-            parse(json, UA, None, None).unwrap_err(),
-            "Sign in to confirm your age"
-        );
-        assert_eq!(
-            parse(&response(VIDEO), UA, None, None).unwrap_err(),
-            "no playable audio stream"
-        );
-    }
-
-    #[test]
-    fn keeps_only_a_whole_first_range() {
-        assert!(head_fits(HEAD_LEN, 4171552));
-        assert!(head_fits(1000, 1000), "a stream shorter than the range");
-        assert!(!head_fits(HEAD_LEN - 1, 4171552), "cut short");
-        assert!(!head_fits(1001, 1000), "longer than the stream");
-        assert!(!head_fits(HEAD_LEN, 0), "unknown size");
     }
 
     /// Checks every plain-URL client and the Premium player trim against
