@@ -213,7 +213,7 @@ impl App {
                     }
                     // Saved or subscribed to since it was asked, it may predate that.
                     if state.library_revision != revision {
-                        crate::app::browse::page::keep_library_state(&mut page, Some(cached));
+                        super::page::keep_library_state(&mut page, Some(cached));
                     }
                     let ours = *at == cached_at;
                     let current = state.page_generation == generation;

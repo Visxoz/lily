@@ -1,5 +1,5 @@
-//! Loading tracks and the transport controls: play, pause, seek, skip,
-//! volume, shuffle and repeat.
+//! Loading tracks and reacting to the player, with the transport controls in
+//! `transport.rs`.
 
 pub(super) mod gapless;
 pub(super) mod premium_state;

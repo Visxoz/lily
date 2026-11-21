@@ -354,7 +354,7 @@ impl App {
                 let keep = whole && app.state.borrow().account == account;
                 if keep && let Some((cached, _)) = app.state.borrow_mut().page_cache.get_mut(&route)
                 {
-                    crate::app::browse::page::keep_library_state(&mut page, Some(cached));
+                    super::page::keep_library_state(&mut page, Some(cached));
                     *cached = page.clone();
                 }
                 if app.state.borrow().queue_generation != queue_generation {

@@ -1,4 +1,5 @@
-//! Signing in to YouTube Music and keeping the session, and Last.fm.
+//! Signing in to YouTube Music and keeping the session, the sidebar's
+//! playlists and pins, and Last.fm.
 
 pub(super) mod scrobble;
 

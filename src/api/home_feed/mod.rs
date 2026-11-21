@@ -1,5 +1,5 @@
 //! The personal home feed (`FEmusic_home`), which rustypipe has no model for.
-//! Types name only the fields used, so serde skips the rest without allocating.
+//! Shelves are held back until every one ranked above them has arrived.
 
 mod parse;
 
