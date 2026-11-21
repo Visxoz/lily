@@ -1,6 +1,6 @@
 use std::{rc::Rc, time::Instant};
 
-use super::App;
+use crate::app::App;
 use crate::{api::Track, audio::SILENCE_TRIM_SECS, settings::Settings};
 
 /// Time for the next stream to start downloading and its decoder to open. A
@@ -20,7 +20,7 @@ fn in_album_order(current: Option<&Track>, next: &Track) -> bool {
 }
 
 impl App {
-    pub(super) fn change_crossfade(&self, change: impl FnOnce(&mut Settings)) {
+    pub(in crate::app) fn change_crossfade(&self, change: impl FnOnce(&mut Settings)) {
         self.update_settings(change);
         // A track queued with the old setting is queued again.
         self.state.borrow_mut().playback.unqueue();
@@ -28,7 +28,7 @@ impl App {
     }
 
     /// Runs every tick, so it copies nothing until a track is due.
-    pub(super) fn update_gapless(self: &Rc<Self>, position: f64) {
+    pub(in crate::app) fn update_gapless(self: &Rc<Self>, position: f64) {
         let (stale, due, generation) = {
             let state = self.state.borrow();
             let playback = &state.playback;
@@ -100,7 +100,7 @@ impl App {
 
     /// The queued track became audible: move the queue on and show it,
     /// without loading anything.
-    pub(super) fn advance_gapless(self: &Rc<Self>) {
+    pub(in crate::app) fn advance_gapless(self: &Rc<Self>) {
         let Some((id, stream, resolved_at)) = self.state.borrow_mut().playback.queued.take() else {
             return;
         };

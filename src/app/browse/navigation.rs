@@ -5,7 +5,7 @@ use std::{
 
 use slint::{ComponentHandle, ModelRc, SharedString, TimerMode, VecModel};
 
-use super::{App, HistoryEntry, s};
+use crate::app::{App, HistoryEntry, s};
 use crate::{
     Api as ApiGlobal, AppWindow,
     api::{self, Page, Route},
@@ -17,7 +17,7 @@ const PAGE_CACHE_SIZE: usize = 12;
 const SUGGEST_DELAY: Duration = Duration::from_millis(150);
 
 impl App {
-    pub(super) fn navigate(self: &Rc<Self>, route: Route, push: bool) {
+    pub(in crate::app) fn navigate(self: &Rc<Self>, route: Route, push: bool) {
         let ui = self.ui();
         let generation = {
             let mut state = self.state.borrow_mut();
@@ -123,7 +123,7 @@ impl App {
 
     /// The cached copy of `route`, whether it is fresh, and when it was cached.
     /// One left half-loaded is none once expired, as its continuation has too.
-    pub(super) fn cached_page(&self, route: &Route) -> Option<(Page, bool, Instant)> {
+    pub(in crate::app) fn cached_page(&self, route: &Route) -> Option<(Page, bool, Instant)> {
         self.state
             .borrow()
             .page_cache
@@ -213,7 +213,7 @@ impl App {
                     }
                     // Saved or subscribed to since it was asked, it may predate that.
                     if state.library_revision != revision {
-                        super::page::keep_library_state(&mut page, Some(cached));
+                        crate::app::browse::page::keep_library_state(&mut page, Some(cached));
                     }
                     let ours = *at == cached_at;
                     let current = state.page_generation == generation;
@@ -314,14 +314,14 @@ impl App {
         );
     }
 
-    pub(super) fn save_home(self: &Rc<Self>, sections: Vec<api::Section>) {
+    pub(in crate::app) fn save_home(self: &Rc<Self>, sections: Vec<api::Section>) {
         if !self.state.borrow().signed_in {
             return;
         }
         self.spawn(async move { settings::save_home(&sections) }, |_, ()| {});
     }
 
-    pub(super) fn cache_page(&self, route: Route, page: Page) {
+    pub(in crate::app) fn cache_page(&self, route: Route, page: Page) {
         let mut state = self.state.borrow_mut();
         let cache = &mut state.page_cache;
         // Expired pages are kept to show while they reload, but not those
@@ -340,7 +340,7 @@ impl App {
     }
 
     /// A page built on this PC, or the message in its place.
-    pub(super) fn show_or_empty(self: &Rc<Self>, page: Option<Page>, empty: &str) {
+    pub(in crate::app) fn show_or_empty(self: &Rc<Self>, page: Option<Page>, empty: &str) {
         let ui = self.ui();
         ui.set_page_loading(false);
         match page {
@@ -357,14 +357,14 @@ impl App {
         }
     }
 
-    pub(super) fn reload(self: &Rc<Self>) {
+    pub(in crate::app) fn reload(self: &Rc<Self>) {
         let route = self.state.borrow().route.clone();
         self.state.borrow_mut().page_cache.remove(&route);
         self.navigate(route, false);
     }
 
     /// For signing in or out; navigating to the page already shown would do nothing.
-    pub(super) fn show_fresh(self: &Rc<Self>, route: Route) {
+    pub(in crate::app) fn show_fresh(self: &Rc<Self>, route: Route) {
         if self.state.borrow().route == route {
             self.reload();
         } else {
@@ -372,11 +372,11 @@ impl App {
         }
     }
 
-    pub(super) fn go_back(self: &Rc<Self>) {
+    pub(in crate::app) fn go_back(self: &Rc<Self>) {
         self.step_history(false);
     }
 
-    pub(super) fn go_forward(self: &Rc<Self>) {
+    pub(in crate::app) fn go_forward(self: &Rc<Self>) {
         self.step_history(true);
     }
 
@@ -403,14 +403,14 @@ impl App {
         self.navigate(entry.route, false);
     }
 
-    pub(super) fn update_nav(&self, ui: &AppWindow) {
+    pub(in crate::app) fn update_nav(&self, ui: &AppWindow) {
         let state = self.state.borrow();
         ui.set_nav_current(state.route.nav_name().into());
         ui.set_can_back(!state.back.is_empty());
         ui.set_can_forward(!state.forward.is_empty());
     }
 
-    pub(super) fn search(self: &Rc<Self>, query: &str) {
+    pub(in crate::app) fn search(self: &Rc<Self>, query: &str) {
         self.drop_suggestions();
         let query = query.trim();
         if query.is_empty() {
@@ -423,7 +423,7 @@ impl App {
         }
     }
 
-    pub(super) fn forget_search(&self, query: &str) {
+    pub(in crate::app) fn forget_search(&self, query: &str) {
         let removed = self.state.borrow_mut().searches.remove(query);
         if removed {
             self.recent_searches_changed();
@@ -437,7 +437,7 @@ impl App {
         self.show_recent_searches();
     }
 
-    pub(super) fn show_recent_searches(&self) {
+    pub(in crate::app) fn show_recent_searches(&self) {
         let recent: VecModel<SharedString> =
             self.state.borrow().searches.queries().map(s).collect();
         self.ui()
@@ -450,7 +450,7 @@ impl App {
         self.ui().set_suggestions(ModelRc::default());
     }
 
-    pub(super) fn suggest(self: &Rc<Self>, query: String) {
+    pub(in crate::app) fn suggest(self: &Rc<Self>, query: String) {
         if query.trim().chars().count() < 2 {
             self.drop_suggestions();
             return;

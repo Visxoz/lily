@@ -15,7 +15,7 @@ use slint::{
     },
 };
 
-use super::App;
+use crate::app::App;
 use crate::{Api as ApiGlobal, MiniPlayer, Theme};
 
 thread_local! {
@@ -36,7 +36,7 @@ pub fn window_attributes(attributes: WindowAttributes) -> WindowAttributes {
 }
 
 impl App {
-    pub(super) fn toggle_mini_player(self: &Rc<Self>) {
+    pub(in crate::app) fn toggle_mini_player(self: &Rc<Self>) {
         if self.mini.borrow().is_some() {
             self.close_mini_player();
         } else {
@@ -119,7 +119,7 @@ impl App {
     }
 
     /// Dropped a tick later, as its own callback may be what closes it.
-    pub(super) fn close_mini_player(&self) {
+    pub(in crate::app) fn close_mini_player(&self) {
         let Some(mini) = self.mini.take() else {
             return;
         };
@@ -155,7 +155,7 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub(super) fn theme_mini(&self) {
+    pub(in crate::app) fn theme_mini(&self) {
         if let Some(mini) = &*self.mini.borrow() {
             let ui = self.ui();
             let (from, to) = (ui.global::<Theme>(), mini.global::<Theme>());
@@ -165,7 +165,7 @@ impl App {
     }
 
     /// Run every tick: setting a property to its value changes nothing.
-    pub(super) fn sync_mini(&self) {
+    pub(in crate::app) fn sync_mini(&self) {
         let mini = self.mini.borrow();
         let Some(mini) = mini.as_ref() else {
             return;

@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::App;
+use crate::app::App;
 use crate::{
     api::{self, Api},
     audio::{Input, Opening, Refresh, Source, StreamSpec},
@@ -19,9 +19,9 @@ use crate::{
     streams::{self, ResolvedStream, premium},
 };
 
-pub(super) const PREMIUM_UNKNOWN: u8 = 0;
-pub(super) const PREMIUM_YES: u8 = 1;
-pub(super) const PREMIUM_NO: u8 = 2;
+pub(in crate::app) const PREMIUM_UNKNOWN: u8 = 0;
+pub(in crate::app) const PREMIUM_YES: u8 = 1;
+pub(in crate::app) const PREMIUM_NO: u8 = 2;
 /// Songs in a row without Premium formats before an account not yet known
 /// to have Premium counts as without it, as some songs simply have no
 /// Premium version.
@@ -38,7 +38,7 @@ const PREMIUM_MAX_ERRORS: u8 = 3;
 const PLAYER_RECHECK: Duration = Duration::from_secs(60 * 60);
 
 /// Premium audio state shared with background tasks.
-pub(super) struct PremiumShared {
+pub(in crate::app) struct PremiumShared {
     /// The cut-down player script, swapped when YouTube moves to a new one.
     player: tokio::sync::Mutex<Option<Arc<premium::Player>>>,
     /// When the held player was loaded or last checked.
@@ -63,7 +63,7 @@ pub(super) struct PremiumShared {
 impl PremiumShared {
     /// `known`: served Premium formats before; `none`: last taken as without
     /// Premium, which is rechecked on the first song as `recheck_at` starts unset.
-    pub(super) fn new(known: bool, none: bool) -> Self {
+    pub(in crate::app) fn new(known: bool, none: bool) -> Self {
         let status = match (known, none) {
             (true, _) => PREMIUM_YES,
             (false, true) => PREMIUM_NO,
@@ -82,12 +82,12 @@ impl PremiumShared {
         }
     }
 
-    pub(super) fn status(&self) -> u8 {
+    pub(in crate::app) fn status(&self) -> u8 {
         self.status.load(Ordering::Relaxed)
     }
 
     /// Signing in or out says nothing yet about Premium.
-    pub(super) fn reset(&self) {
+    pub(in crate::app) fn reset(&self) {
         self.status.store(PREMIUM_UNKNOWN, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
         *self.recheck_at.lock().unwrap() = None;
@@ -157,7 +157,7 @@ impl PremiumShared {
     }
 
     /// A Premium stream failed, so check the player sooner.
-    pub(super) fn suspect_player(&self) {
+    pub(in crate::app) fn suspect_player(&self) {
         self.player_suspect.store(true, Ordering::Relaxed);
     }
 
@@ -172,7 +172,7 @@ impl PremiumShared {
 }
 
 /// `YTM_PREMIUM_DRYRUN=1` times the Premium path while playing free streams.
-pub(super) fn premium_dry_run() -> bool {
+pub(in crate::app) fn premium_dry_run() -> bool {
     std::env::var_os("YTM_PREMIUM_DRYRUN").is_some()
 }
 
@@ -486,7 +486,7 @@ impl App {
 
     /// The playing song's stream and when it was resolved, while the player
     /// holds all of it, so a replay plays from memory (its URL may have expired).
-    pub(super) fn held_stream(&self, video_id: &str) -> Option<(ResolvedStream, Instant)> {
+    pub(in crate::app) fn held_stream(&self, video_id: &str) -> Option<(ResolvedStream, Instant)> {
         let state = self.state.borrow();
         let (id, stream, at) = state.playback.playing.as_ref()?;
         (id == video_id && self.player.holds(&stream.url)).then(|| (stream.clone(), *at))
@@ -494,7 +494,7 @@ impl App {
 
     /// A downloaded or local file plays from there, online or not, ahead
     /// of anything prefetched.
-    pub(super) fn resolve_future(
+    pub(in crate::app) fn resolve_future(
         self: &Rc<Self>,
         video_id: String,
         prefetched: Option<ResolvedStream>,
@@ -511,7 +511,7 @@ impl App {
     }
 
     /// `video_id`'s stream to download, from YouTube.
-    pub(super) fn keeping_future(
+    pub(in crate::app) fn keeping_future(
         &self,
         video_id: String,
     ) -> impl Future<Output = Result<ResolvedStream, String>> + Send + 'static {
@@ -520,7 +520,7 @@ impl App {
     }
 
     /// The player's spec for `video_id`'s stream.
-    pub(super) fn stream_spec(
+    pub(in crate::app) fn stream_spec(
         &self,
         video_id: &str,
         mut stream: ResolvedStream,
@@ -544,7 +544,7 @@ impl App {
     /// Where `video_id`'s stream downloads from. Should googlevideo refuse its
     /// URL partway, the download's thread waits on a fresh one, and should
     /// that be refused too, on one from another client.
-    pub(super) fn remote_source(
+    pub(in crate::app) fn remote_source(
         &self,
         video_id: &str,
         stream: ResolvedStream,
@@ -571,7 +571,7 @@ impl App {
 
     /// Prepares the Premium player script in the background, so the first
     /// song does not wait for it. Only runs when Premium audio can apply.
-    pub(super) fn warm_premium(self: &Rc<Self>) {
+    pub(in crate::app) fn warm_premium(self: &Rc<Self>) {
         let wanted = {
             let state = self.state.borrow();
             state.signed_in && state.settings.quality == Quality::High && self.api.has_cookie()

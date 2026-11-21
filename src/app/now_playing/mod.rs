@@ -1,6 +1,9 @@
 //! What shows the playing track: the player bar, the queue and lyrics
 //! panel, the media overlay and Discord.
 
+pub(super) mod mini;
+pub(super) mod queue_panel;
+
 use std::{rc::Rc, time::Duration};
 
 use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, TimerMode, VecModel};

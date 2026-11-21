@@ -1,8 +1,12 @@
+//! Signing in to YouTube Music and keeping the session, and Last.fm.
+
+pub(super) mod scrobble;
+
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use slint::{ComponentHandle, Image, Model, SharedString, Timer, TimerMode};
 
-use super::{App, items::card_item};
+use super::{App, browse::items::card_item};
 use crate::{
     Api as ApiGlobal, CardItem,
     api::{Card, Route},

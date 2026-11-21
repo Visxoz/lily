@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use slint::{Image, Model, ModelRc, VecModel};
 
-use super::{
+use crate::app::{
     App,
-    items::{card_item, track_row},
+    browse::items::{card_item, track_row},
     opaque, s,
 };
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 
 /// Carries `live`'s saved and subscribed flags onto `page`, fetched from an
 /// older copy and so maybe stale.
-pub(super) fn keep_library_state(page: &mut Page, live: Option<&Page>) {
+pub(in crate::app) fn keep_library_state(page: &mut Page, live: Option<&Page>) {
     if let (Some(header), Some(live)) = (page.header.as_mut(), live.and_then(|p| p.header.as_ref()))
     {
         header.saved = live.saved;
@@ -25,7 +25,11 @@ pub(super) fn keep_library_state(page: &mut Page, live: Option<&Page>) {
 }
 
 /// A page of `tracks` built on this PC, or `None` without any.
-pub(super) fn track_list_page(label: &str, title: &str, tracks: Vec<Track>) -> Option<Page> {
+pub(in crate::app) fn track_list_page(
+    label: &str,
+    title: &str,
+    tracks: Vec<Track>,
+) -> Option<Page> {
     (!tracks.is_empty()).then(|| Page {
         header: Some(Header {
             label: label.to_owned(),
@@ -122,7 +126,7 @@ impl Built {
 }
 
 impl App {
-    pub(super) fn show_page(self: &Rc<Self>, mut page: Page) {
+    pub(in crate::app) fn show_page(self: &Rc<Self>, mut page: Page) {
         let (generation, route) = {
             let state = self.state.borrow();
             // Applied as it shows rather than as it loads, so a cached Home
@@ -246,7 +250,7 @@ impl App {
         }
     }
 
-    pub(super) fn find_row(&self, kind: RowKind) -> Option<usize> {
+    pub(in crate::app) fn find_row(&self, kind: RowKind) -> Option<usize> {
         (0..self.rows().row_count())
             .find(|&i| self.rows().row_data(i).is_some_and(|r| r.kind == kind))
     }
@@ -266,7 +270,7 @@ impl App {
     }
 
     /// Loads the artwork of track row `row`, asked for by the row once on screen.
-    pub(super) fn load_row_art(self: &Rc<Self>, row: usize) {
+    pub(in crate::app) fn load_row_art(self: &Rc<Self>, row: usize) {
         let Some(item) = self
             .rows()
             .row_data(row)
@@ -438,7 +442,7 @@ impl App {
     }
 
     /// Shows the page's header as it now is, its song count for one.
-    pub(super) fn refresh_header(&self) {
+    pub(in crate::app) fn refresh_header(&self) {
         let state = self.state.borrow();
         let Some(header) = &state.page.header else {
             return;
@@ -458,7 +462,7 @@ impl App {
 }
 
 fn greeting() -> &'static str {
-    greeting_for(super::local_now().hour())
+    greeting_for(crate::app::local_now().hour())
 }
 
 fn greeting_for(hour: u8) -> &'static str {

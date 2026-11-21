@@ -1,4 +1,4 @@
-use super::{opaque, s};
+use crate::app::{opaque, s};
 use crate::{
     CardItem, RowItem, RowKind, TrackItem,
     api::{self, Card, CardKind, Track},
@@ -21,7 +21,7 @@ fn track_item(track: &Track, number: usize, downloaded: bool) -> TrackItem {
     }
 }
 
-pub(super) fn track_row(
+pub(in crate::app) fn track_row(
     track: &Track,
     index: usize,
     numbered: bool,
@@ -44,7 +44,7 @@ pub(super) fn track_row(
     }
 }
 
-pub(super) fn card_item(card: &Card, edge: u32) -> CardItem {
+pub(in crate::app) fn card_item(card: &Card, edge: u32) -> CardItem {
     let tint = card.color.map_or(slint::Color::default(), opaque);
     CardItem {
         kind: s(card.kind.as_str()),

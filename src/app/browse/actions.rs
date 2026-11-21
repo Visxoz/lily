@@ -1,7 +1,7 @@
 use std::{collections::HashSet, rc::Rc};
 
-use super::App;
 use crate::api::{self, CardKind, Page, QueueMode, Route, Section, Track};
+use crate::app::App;
 
 fn card_kind(kind: &str) -> Option<CardKind> {
     match kind {
@@ -20,7 +20,7 @@ impl App {
         }
     }
 
-    pub(super) fn play_from_section(self: &Rc<Self>, section: usize, index: usize) {
+    pub(in crate::app) fn play_from_section(self: &Rc<Self>, section: usize, index: usize) {
         // Only a section played whole is copied; a radio seed is one track.
         let (track, whole) = {
             let state = self.state.borrow();
@@ -75,7 +75,7 @@ impl App {
     }
 
     /// For radios, which may repeat what is queued.
-    pub(super) fn append_unique(self: &Rc<Self>, tracks: Vec<Track>) {
+    pub(in crate::app) fn append_unique(self: &Rc<Self>, tracks: Vec<Track>) {
         let fresh: Vec<Track> = {
             let state = self.state.borrow();
             let known: HashSet<&str> = state.queue.items().map(|t| t.id.as_str()).collect();
@@ -138,7 +138,7 @@ impl App {
         );
     }
 
-    pub(super) fn header_action(self: &Rc<Self>, action: &str) {
+    pub(in crate::app) fn header_action(self: &Rc<Self>, action: &str) {
         if action == "copy-link" {
             let link = self.state.borrow().route.link();
             return self.copy_link(link);
@@ -195,7 +195,7 @@ impl App {
     }
 
     /// A menu action on a song, album, playlist or artist, by its kind and ID.
-    pub(super) fn card_action(self: &Rc<Self>, action: &str, kind: &str, id: &str) {
+    pub(in crate::app) fn card_action(self: &Rc<Self>, action: &str, kind: &str, id: &str) {
         match action {
             "copy-link" => self.copy_link(api::link(kind, id)),
             "pin" | "unpin" => {
@@ -256,13 +256,13 @@ impl App {
             })
     }
 
-    pub(super) fn play_song_card(self: &Rc<Self>, id: &str) {
+    pub(in crate::app) fn play_song_card(self: &Rc<Self>, id: &str) {
         if let Some(track) = self.song_card(id) {
             self.play_with_radio(track);
         }
     }
 
-    pub(super) fn play_card(self: &Rc<Self>, kind: &str, id: String, radio: bool) {
+    pub(in crate::app) fn play_card(self: &Rc<Self>, kind: &str, id: String, radio: bool) {
         if kind == "song" {
             self.play_song_card(&id);
             return;
@@ -354,7 +354,7 @@ impl App {
                 let keep = whole && app.state.borrow().account == account;
                 if keep && let Some((cached, _)) = app.state.borrow_mut().page_cache.get_mut(&route)
                 {
-                    super::page::keep_library_state(&mut page, Some(cached));
+                    crate::app::browse::page::keep_library_state(&mut page, Some(cached));
                     *cached = page.clone();
                 }
                 if app.state.borrow().queue_generation != queue_generation {
@@ -370,7 +370,7 @@ impl App {
         );
     }
 
-    pub(super) fn download_card(self: &Rc<Self>, kind: &str, id: String) {
+    pub(in crate::app) fn download_card(self: &Rc<Self>, kind: &str, id: String) {
         if kind == "song" {
             if let Some(track) = self.song_card(&id) {
                 self.download(vec![track]);
@@ -391,7 +391,7 @@ impl App {
     }
 
     /// A song in the queue, from its row or the player bar.
-    pub(super) fn download_queued(self: &Rc<Self>, id: &str, remove: bool) {
+    pub(in crate::app) fn download_queued(self: &Rc<Self>, id: &str, remove: bool) {
         if remove {
             self.remove_download(id);
             return;
@@ -408,7 +408,12 @@ impl App {
         }
     }
 
-    pub(super) fn track_action(self: &Rc<Self>, action: &str, section: usize, index: usize) {
+    pub(in crate::app) fn track_action(
+        self: &Rc<Self>,
+        action: &str,
+        section: usize,
+        index: usize,
+    ) {
         let Some(track) = self.section_track(section, index) else {
             return;
         };

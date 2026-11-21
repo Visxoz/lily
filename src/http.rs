@@ -130,7 +130,7 @@ fn proxy_path() -> std::path::PathBuf {
 /// Takes the saved proxy into use. Encrypted, as its address may hold a
 /// password.
 pub fn load_proxy() {
-    let Some(saved) = crate::secret::read(&proxy_path()) else {
+    let Some(saved) = crate::platform::secret::read(&proxy_path()) else {
         return;
     };
     match parse_proxy(&saved) {
@@ -158,7 +158,7 @@ pub fn save_proxy(text: &str) -> Result<(Option<String>, bool), &'static str> {
         }
     } else {
         let (url, _) = parse_proxy(text)?;
-        crate::secret::write(&proxy_path(), url.as_str())
+        crate::platform::secret::write(&proxy_path(), url.as_str())
             .map_err(|_| "Couldn't save the proxy.")?;
         Some(url)
     };

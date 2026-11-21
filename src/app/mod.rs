@@ -2,25 +2,12 @@
 //! Tokio and comes back through `slint::spawn_local`.
 
 mod account;
-mod actions;
 mod bind;
-mod gapless;
-mod items;
+mod browse;
 mod library;
-mod mini;
-mod navigation;
 mod now_playing;
-mod offline;
-mod page;
 mod playback;
-mod playlist_edit;
-mod queue_panel;
-mod resolve;
-mod scrobble;
 mod session;
-mod smart_shuffle;
-mod soak;
-mod song_version;
 mod updates;
 mod window;
 
@@ -46,16 +33,16 @@ use crate::{
     downloads::Downloads,
     google_sign_in::GoogleSignIn,
     images, local,
-    media_controls::{Action, Controls},
+    platform::media_controls::{Action, Controls},
     presence::PresenceHandle,
     queue::{Queue, Repeat},
     settings::{self, Accent, CROSSFADE_SECS, Look, Settings},
     streams::ResolvedStream,
     update,
 };
-pub(crate) use mini::window_attributes as mini_window_attributes;
-use resolve::PremiumShared;
-use song_version::SongVersion;
+pub(crate) use now_playing::mini::window_attributes as mini_window_attributes;
+use playback::resolve::PremiumShared;
+use playback::song_version::SongVersion;
 
 const TICK: Duration = Duration::from_millis(250);
 /// A row's artwork still waiting once this many more rows have asked is for
@@ -254,14 +241,14 @@ struct State {
     song_versions: HashMap<String, SongVersion>,
     history: settings::History,
     searches: settings::Searches,
-    smart: smart_shuffle::Smart,
+    smart: playback::smart_shuffle::Smart,
     /// Bumped as the playing song changes or is rated, so a rating fetched
     /// before then is not shown.
     rating_generation: u64,
     /// The song being saved to a playlist, and the playlists offered.
     saving: Option<(String, Vec<api::PlaylistOption>)>,
     artwork_accent: Option<slint::Color>,
-    scrobbler: scrobble::Scrobbler,
+    scrobbler: account::scrobble::Scrobbler,
     downloads: Downloads,
     /// Songs waiting to download; the first is downloading while `downloading`.
     download_queue: VecDeque<Track>,
@@ -309,7 +296,7 @@ pub struct App {
     eq_gains: Rc<VecModel<f32>>,
     /// Queue revision the queue model shows.
     queue_shown: Cell<Option<u64>>,
-    selection: Cell<queue_panel::Selection>,
+    selection: Cell<now_playing::queue_panel::Selection>,
     /// The page's and the queue's row artwork.
     row_art: RowArt,
     queue_art: RowArt,
@@ -340,7 +327,7 @@ pub struct App {
     local_shown: Cell<u64>,
     /// Settings' devices after "System default": cpal ID and name.
     output_devices: RefCell<Vec<(String, String)>>,
-    tray: OnceCell<crate::tray::Tray>,
+    tray: OnceCell<crate::platform::tray::Tray>,
     /// Set as the window minimises on its way to the tray.
     hide_pending: Cell<bool>,
     mini: RefCell<Option<MiniPlayer>>,
@@ -432,11 +419,11 @@ impl App {
                 song_versions: HashMap::new(),
                 history: settings::History::load(),
                 searches: settings::Searches::load(),
-                smart: smart_shuffle::Smart::default(),
+                smart: playback::smart_shuffle::Smart::default(),
                 rating_generation: 0,
                 saving: None,
                 artwork_accent: None,
-                scrobbler: scrobble::Scrobbler::load(),
+                scrobbler: account::scrobble::Scrobbler::load(),
                 downloads: Downloads::load(),
                 download_queue: VecDeque::new(),
                 downloading: false,
@@ -451,7 +438,7 @@ impl App {
             queue_model: Rc::new(VecModel::default()),
             eq_gains: Rc::new(VecModel::from(vec![0.0; eq::BANDS.len()])),
             queue_shown: Cell::new(None),
-            selection: Cell::new(queue_panel::Selection::default()),
+            selection: Cell::new(now_playing::queue_panel::Selection::default()),
             row_art: RowArt::default(),
             queue_art: RowArt::default(),
             tick: Timer::default(),

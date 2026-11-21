@@ -1,6 +1,12 @@
 //! Loading tracks and the transport controls: play, pause, seek, skip,
 //! volume, shuffle and repeat.
 
+pub(super) mod gapless;
+pub(super) mod resolve;
+pub(super) mod smart_shuffle;
+pub(super) mod soak;
+pub(super) mod song_version;
+
 use std::{
     rc::Rc,
     time::{Duration, Instant},
@@ -8,16 +14,13 @@ use std::{
 
 use slint::{SharedString, Timer};
 
-use super::{
-    App, SongVersion, State,
-    resolve::{PREMIUM_NO, PREMIUM_YES, premium_dry_run},
-    session::Flush,
-};
+use super::{App, SongVersion, State, session::Flush};
 use crate::{
     images,
     queue::Repeat,
     streams::{ResolvedStream, premium},
 };
+use resolve::{PREMIUM_NO, PREMIUM_YES, premium_dry_run};
 
 /// Pressing previous later than this restarts the track instead.
 const RESTART_AFTER_SECS: f64 = 3.0;

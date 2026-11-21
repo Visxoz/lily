@@ -1,3 +1,10 @@
+//! The user's library: ratings, the add-to-playlist picker, saving albums
+//! and playlists and subscribing to artists, their own playlists' edits, and
+//! music kept offline.
+
+pub(super) mod offline;
+pub(super) mod playlist_edit;
+
 use std::rc::Rc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};

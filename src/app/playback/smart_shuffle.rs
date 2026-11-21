@@ -6,7 +6,7 @@ use std::{
     rc::Rc,
 };
 
-use super::{App, State};
+use crate::app::{App, State};
 use crate::{api::Track, queue::Queue};
 
 /// The user's own tracks between two recommendations.
@@ -19,7 +19,7 @@ const LOOKAHEAD: usize = 8;
 const RECENT: usize = 100;
 
 #[derive(Default)]
-pub(super) struct Smart {
+pub(in crate::app) struct Smart {
     /// Bumped when the queue is replaced or Smart Shuffle turned off, so a
     /// batch asked for an earlier queue is dropped as it arrives.
     generation: u64,
@@ -35,7 +35,7 @@ pub(super) struct Smart {
 }
 
 impl Smart {
-    pub(super) fn reset(&mut self) {
+    pub(in crate::app) fn reset(&mut self) {
         self.generation += 1;
         self.fetching = false;
         self.pool.clear();
@@ -75,7 +75,7 @@ fn seed(queue: &mut Queue<Track>) -> Option<String> {
 impl App {
     /// Puts recommendations among the upcoming tracks where they are due,
     /// and asks for a batch when the pool runs dry.
-    pub(super) fn smart_top_up(self: &Rc<Self>) {
+    pub(in crate::app) fn smart_top_up(self: &Rc<Self>) {
         let (before, inserted, fetch) = {
             let mut state = self.state.borrow_mut();
             if !state.settings.smart_shuffle {

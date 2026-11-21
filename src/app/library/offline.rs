@@ -10,7 +10,7 @@ use std::{
 
 use slint::{ComponentHandle, Model};
 
-use super::{App, page::track_list_page};
+use crate::app::{App, browse::page::track_list_page};
 use crate::{
     Api as ApiGlobal, RowKind,
     api::{self, Route, Track},
@@ -47,7 +47,7 @@ fn local_stream(path: &Path) -> ResolvedStream {
 
 impl App {
     /// The file `id` plays from: a local file's own path, or its download.
-    pub(super) fn offline_stream(self: &Rc<Self>, id: &str) -> Option<ResolvedStream> {
+    pub(in crate::app) fn offline_stream(self: &Rc<Self>, id: &str) -> Option<ResolvedStream> {
         let path = Path::new(id);
         if local::owns(path) {
             return Some(local_stream(path));
@@ -67,7 +67,7 @@ impl App {
 
     /// Queues `tracks` to download one after another, skipping those
     /// downloaded or on their way.
-    pub(super) fn download(self: &Rc<Self>, tracks: Vec<Track>) {
+    pub(in crate::app) fn download(self: &Rc<Self>, tracks: Vec<Track>) {
         let (added, waiting) = {
             let mut state = self.state.borrow_mut();
             let before = state.download_queue.len();
@@ -148,7 +148,7 @@ impl App {
         self.download_next();
     }
 
-    pub(super) fn remove_download(self: &Rc<Self>, id: &str) {
+    pub(in crate::app) fn remove_download(self: &Rc<Self>, id: &str) {
         let removed = {
             let mut state = self.state.borrow_mut();
             // Its file is going, so it's prefetched afresh.
@@ -200,7 +200,7 @@ impl App {
         }
     }
 
-    pub(super) fn show_downloads(self: &Rc<Self>) {
+    pub(in crate::app) fn show_downloads(self: &Rc<Self>) {
         let tracks = self.state.borrow().downloads.tracks();
         self.show_or_empty(
             track_list_page("Offline", "Downloads", tracks),
@@ -224,7 +224,7 @@ impl App {
     }
 
     /// Lists the folders' music, reading only files new since the last time.
-    pub(super) fn load_local_files(self: &Rc<Self>, generation: u64) {
+    pub(in crate::app) fn load_local_files(self: &Rc<Self>, generation: u64) {
         if self.state.borrow().settings.local_folders.is_empty() {
             self.show_or_empty(None, "Add a folder of your music to play it here.");
             return;
@@ -249,7 +249,7 @@ impl App {
     /// songs whose files have gone leave the queue, and Local files is read
     /// again should it be open. One check runs at a time, and changes
     /// meanwhile bring one more.
-    pub(super) fn local_files_changed(self: &Rc<Self>) {
+    pub(in crate::app) fn local_files_changed(self: &Rc<Self>) {
         if self.local_check.get().is_some() {
             self.local_check.set(Some(true));
             return;
@@ -337,12 +337,12 @@ impl App {
     }
 
     /// Asks for a folder of music to add, and shows Local files with it.
-    pub(super) fn add_folder(self: &Rc<Self>) {
+    pub(in crate::app) fn add_folder(self: &Rc<Self>) {
         let Some(owner) = crate::hwnd(&self.ui().window().window_handle()) else {
             return;
         };
         let (tx, rx) = tokio::sync::oneshot::channel();
-        crate::folder_picker::pick(owner as isize, move |folder| {
+        crate::platform::folder_picker::pick(owner as isize, move |folder| {
             let _ = tx.send(folder);
         });
         let app = Rc::clone(self);
@@ -361,7 +361,7 @@ impl App {
         self.show_fresh(Route::LocalFiles);
     }
 
-    pub(super) fn remove_folder(self: &Rc<Self>, index: usize) {
+    pub(in crate::app) fn remove_folder(self: &Rc<Self>, index: usize) {
         if index >= self.state.borrow().settings.local_folders.len() {
             return;
         }

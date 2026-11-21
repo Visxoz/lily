@@ -264,7 +264,7 @@ impl App {
 
     pub(super) fn history_page(&self) -> Option<Page> {
         let tracks = self.state.borrow().history.tracks().cloned().collect();
-        super::page::track_list_page("Recently played", "History", tracks)
+        super::browse::page::track_list_page("Recently played", "History", tracks)
     }
 
     pub(super) fn persist_soon(self: &Rc<Self>) {

@@ -3,20 +3,20 @@
 
 use std::rc::Rc;
 
-use super::App;
 use crate::api::Track;
+use crate::app::App;
 
 /// Most videos remembered; past it the cache starts over.
 const SONG_VERSIONS_LIMIT: usize = 256;
 
-pub(super) enum SongVersion {
+pub(in crate::app) enum SongVersion {
     Pending,
     Known(Option<Track>),
 }
 
 impl App {
     /// Returns at once; the queue changes later.
-    pub(super) fn swap_in_song_version(self: &Rc<Self>, next: &Track) {
+    pub(in crate::app) fn swap_in_song_version(self: &Rc<Self>, next: &Track) {
         // A downloaded video plays as it was saved, online or not.
         if !next.video || self.state.borrow().downloads.contains(&next.id) {
             return;

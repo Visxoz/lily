@@ -99,7 +99,9 @@ impl Api {
     /// A client keeping its sign-in in `dir`.
     fn in_dir(dir: std::path::PathBuf, visitor: Option<String>) -> Result<Self> {
         let rp = RustyPipe::builder()
-            .storage(Box::new(crate::secret::EncryptedStorage::new(&dir)))
+            .storage(Box::new(crate::platform::secret::EncryptedStorage::new(
+                &dir,
+            )))
             .storage_dir(dir)
             // Its reports hold whole responses, signed-in ones too, written
             // unencrypted and never cleared; nothing reads them.

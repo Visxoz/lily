@@ -13,7 +13,7 @@ use windows_sys::Win32::System::{
     Threading::GetCurrentProcess,
 };
 
-use super::App;
+use crate::app::App;
 
 impl App {
     /// The soak timer, held by `main`; none unless `YTM_SOAK` is set.

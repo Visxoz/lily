@@ -5,7 +5,7 @@ use std::{ops::RangeInclusive, rc::Rc, time::Instant};
 
 use slint::{ComponentHandle, Model};
 
-use super::{App, HistoryEntry, items::track_row, s};
+use crate::app::{App, HistoryEntry, browse::items::track_row, s};
 use crate::{
     Api as ApiGlobal, RowItem, RowKind,
     api::{self, Card, Page, PlaylistPrivacy, Route, Section, Track},
@@ -144,7 +144,7 @@ impl App {
 
     /// Offers the page's edits should it be one of the account's own
     /// playlists loaded whole, so every entry's place is known.
-    pub(super) fn offer_edits(&self) {
+    pub(in crate::app) fn offer_edits(&self) {
         let state = self.state.borrow();
         let header = (state.signed_in && state.page.more.is_none())
             .then_some(state.page.header.as_ref())
@@ -180,7 +180,7 @@ impl App {
         shown.then(|| edit(&mut state.page))
     }
 
-    pub(super) fn header_changed(&self) {
+    pub(in crate::app) fn header_changed(&self) {
         self.offer_edits();
         self.refresh_header();
     }
@@ -238,7 +238,7 @@ impl App {
 
     /// Shows a playlist made, renamed or deleted in the sidebar at once, as
     /// YouTube's list can take a moment to.
-    pub(super) fn edit_library(self: &Rc<Self>, edit: impl FnOnce(&mut Vec<Card>)) {
+    pub(in crate::app) fn edit_library(self: &Rc<Self>, edit: impl FnOnce(&mut Vec<Card>)) {
         let cards = {
             let mut state = self.state.borrow_mut();
             // A load already asked for may predate the edit.
@@ -251,7 +251,7 @@ impl App {
     }
 
     /// The header's rename, privacy and delete; the first and last ask first.
-    pub(super) fn edit_playlist(self: &Rc<Self>, action: &str) {
+    pub(in crate::app) fn edit_playlist(self: &Rc<Self>, action: &str) {
         let Some(target) = self.own_playlist() else {
             return;
         };
@@ -316,7 +316,7 @@ impl App {
         );
     }
 
-    pub(super) fn rename_playlist(self: &Rc<Self>, id: String, name: &str) {
+    pub(in crate::app) fn rename_playlist(self: &Rc<Self>, id: String, name: &str) {
         let name = name.trim().to_owned();
         if name.is_empty() || name == self.ui().get_edit_title().as_str() {
             return;
@@ -357,7 +357,7 @@ impl App {
 
     /// Deletes the playlist and, should it be on screen, leaves it for the
     /// page before, or the library.
-    pub(super) fn delete_playlist(self: &Rc<Self>, id: String) {
+    pub(in crate::app) fn delete_playlist(self: &Rc<Self>, id: String) {
         let title = self.ui().get_edit_title().to_string();
         let account = self.state.borrow().account;
         let api = self.api.clone();
@@ -402,7 +402,7 @@ impl App {
         );
     }
 
-    pub(super) fn remove_from_playlist(self: &Rc<Self>, section: usize, track: Track) {
+    pub(in crate::app) fn remove_from_playlist(self: &Rc<Self>, section: usize, track: Track) {
         let Some(target) = self.own_playlist().filter(|_| section == 0) else {
             return;
         };
@@ -445,7 +445,7 @@ impl App {
 
     /// Moves song `from` of the playlist on screen, the song `id`, to `to`, as
     /// dragged; not should the rows have changed under the drag.
-    pub(super) fn move_in_playlist(self: &Rc<Self>, from: usize, to: usize, id: &str) {
+    pub(in crate::app) fn move_in_playlist(self: &Rc<Self>, from: usize, to: usize, id: &str) {
         let Some(target) = self.own_playlist() else {
             return;
         };

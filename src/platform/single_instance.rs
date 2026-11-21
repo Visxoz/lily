@@ -9,7 +9,7 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::tray::{self, wide};
+use super::tray::{self, wide};
 
 /// Kept from before the app was named Lily, so an older copy and a newer one
 /// never run together, which would share the data folder as it moves.

@@ -11,7 +11,7 @@ use windows_sys::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetW
 use super::App;
 use crate::{
     Api as ApiGlobal, AppWindow,
-    tray::{Action, MenuState, Tray},
+    platform::tray::{Action, MenuState, Tray},
 };
 
 /// Off, going to the tray and back is immediate.

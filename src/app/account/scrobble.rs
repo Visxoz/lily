@@ -8,7 +8,7 @@ use std::{
 
 use slint::{Timer, TimerMode};
 
-use super::App;
+use crate::app::App;
 use crate::lastfm::{self, Error, Play};
 
 /// Polling for access allowed in the browser. The token lasts an hour, and
@@ -18,7 +18,7 @@ const POLL_FOR: Duration = Duration::from_secs(20 * 60);
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
-pub(super) struct Scrobbler {
+pub(in crate::app) struct Scrobbler {
     session: Option<lastfm::Session>,
     pending: lastfm::Pending,
     /// The song playing, until enough of it has been heard to count.
@@ -33,7 +33,7 @@ pub(super) struct Scrobbler {
 }
 
 impl Scrobbler {
-    pub(super) fn load() -> Self {
+    pub(in crate::app) fn load() -> Self {
         let session = lastfm::load_session();
         let mut pending = lastfm::Pending::load();
         if let Some(session) = &session {
@@ -46,13 +46,13 @@ impl Scrobbler {
         }
     }
 
-    pub(super) fn save(&mut self) {
+    pub(in crate::app) fn save(&mut self) {
         self.pending.save();
     }
 }
 
 impl App {
-    pub(super) fn show_lastfm(&self) {
+    pub(in crate::app) fn show_lastfm(&self) {
         let ui = self.ui();
         ui.set_lastfm_available(lastfm::available());
         let state = self.state.borrow();
@@ -61,7 +61,7 @@ impl App {
     }
 
     /// Starts logging the song just started, and sends it as playing now.
-    pub(super) fn scrobble_started(self: &Rc<Self>) {
+    pub(in crate::app) fn scrobble_started(self: &Rc<Self>) {
         let (session, play, generation) = {
             let mut state = self.state.borrow_mut();
             state.scrobbler.playing = None;
@@ -98,7 +98,7 @@ impl App {
     }
 
     /// Logs the song once half of it or four minutes has been heard.
-    pub(super) fn scrobble_heard(self: &Rc<Self>, heard: Duration, length: Duration) {
+    pub(in crate::app) fn scrobble_heard(self: &Rc<Self>, heard: Duration, length: Duration) {
         {
             let scrobbler = &mut self.state.borrow_mut().scrobbler;
             let Some(play) = scrobbler.playing.take_if(|_| lastfm::counts(heard, length)) else {
@@ -111,7 +111,7 @@ impl App {
 
     /// Sends the oldest pending plays, then the rest, saving them once
     /// Last.fm answers.
-    pub(super) fn send_scrobbles(self: &Rc<Self>) {
+    pub(in crate::app) fn send_scrobbles(self: &Rc<Self>) {
         let (session, batch, generation) = {
             let mut state = self.state.borrow_mut();
             let scrobbler = &mut state.scrobbler;
@@ -200,7 +200,7 @@ impl App {
 
     /// Opens Last.fm in the browser for the user to allow access, then
     /// waits for them to.
-    pub(super) fn connect_lastfm(self: &Rc<Self>) {
+    pub(in crate::app) fn connect_lastfm(self: &Rc<Self>) {
         let generation = {
             let scrobbler = &mut self.state.borrow_mut().scrobbler;
             scrobbler.generation += 1;
@@ -268,7 +268,7 @@ impl App {
     /// Forgets the account, or stops waiting for one to connect. Plays not
     /// yet sent are dropped with an account, so none reach the next one;
     /// stopping a wait keeps those of an account whose access was revoked.
-    pub(super) fn disconnect_lastfm(&self) {
+    pub(in crate::app) fn disconnect_lastfm(&self) {
         let connected = self.state.borrow().scrobbler.session.is_some();
         self.end_lastfm();
         if connected {

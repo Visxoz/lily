@@ -5,21 +5,17 @@ mod api;
 mod app;
 mod audio;
 mod downloads;
-mod folder_picker;
 mod google_sign_in;
 mod http;
 mod images;
 mod lastfm;
 mod local;
 mod logger;
-mod media_controls;
+mod platform;
 mod presence;
 mod queue;
-mod secret;
 mod settings;
-mod single_instance;
 mod streams;
-mod tray;
 mod update;
 
 use std::{rc::Rc, time::Duration};
@@ -220,7 +216,7 @@ fn main() {
         unsafe { std::env::set_var("WGPU_VALIDATION", "0") };
     }
     logger::init();
-    let Some(instance) = single_instance::acquire(WINDOW_CLASS) else {
+    let Some(instance) = platform::single_instance::acquire(WINDOW_CLASS) else {
         return;
     };
     update::clean_up();

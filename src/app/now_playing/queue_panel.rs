@@ -4,19 +4,19 @@ use std::rc::Rc;
 
 use slint::Model;
 
-use super::{App, State, now_playing::queue_item};
 use crate::api::{self, Card, CardKind, Route};
+use crate::app::{App, State, now_playing::queue_item};
 
 /// The rows picked with Ctrl- and Shift-click are flagged on the rows
 /// themselves; this is how many, and where a Shift-click selects from.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Selection {
+pub(in crate::app) struct Selection {
     count: usize,
     anchor: Option<usize>,
 }
 
 impl App {
-    pub(super) fn queue_clicked(self: &Rc<Self>, index: usize, control: bool, shift: bool) {
+    pub(in crate::app) fn queue_clicked(self: &Rc<Self>, index: usize, control: bool, shift: bool) {
         if !(control || shift) {
             self.clear_selection();
             if self.state.borrow_mut().queue.jump(index).is_some() {
@@ -69,7 +69,7 @@ impl App {
             .set_queue_selected(self.selection.get().count as i32);
     }
 
-    pub(super) fn clear_selection(&self) {
+    pub(in crate::app) fn clear_selection(&self) {
         if self.selection.get().count > 0 {
             for row in 0..self.queue_model.row_count() {
                 self.select(row, false);
@@ -79,12 +79,12 @@ impl App {
     }
 
     /// The rows were rebuilt or cleared, and carry no flags any more.
-    pub(super) fn forget_selection(&self) {
+    pub(in crate::app) fn forget_selection(&self) {
         self.selection.set(Selection::default());
         self.show_selection();
     }
 
-    pub(super) fn selected_rows(&self) -> Vec<usize> {
+    pub(in crate::app) fn selected_rows(&self) -> Vec<usize> {
         if self.selection.get().count == 0 {
             return Vec::new();
         }
@@ -97,7 +97,7 @@ impl App {
             .collect()
     }
 
-    pub(super) fn queue_move(self: &Rc<Self>, from: usize, to: usize) {
+    pub(in crate::app) fn queue_move(self: &Rc<Self>, from: usize, to: usize) {
         if !self.state.borrow_mut().queue.move_to(from, to) {
             return;
         }
@@ -108,7 +108,7 @@ impl App {
         self.queue_edited();
     }
 
-    pub(super) fn queue_remove(self: &Rc<Self>, rows: Vec<usize>) {
+    pub(in crate::app) fn queue_remove(self: &Rc<Self>, rows: Vec<usize>) {
         let removed = self.state.borrow_mut().queue.remove_many(rows);
         if removed.is_empty() {
             return;
@@ -119,7 +119,7 @@ impl App {
         self.queue_edited();
     }
 
-    pub(super) fn queue_play_next(self: &Rc<Self>, mut rows: Vec<usize>) {
+    pub(in crate::app) fn queue_play_next(self: &Rc<Self>, mut rows: Vec<usize>) {
         let (current, moved) = {
             let mut state = self.state.borrow_mut();
             let Some(current) = state.queue.current_index() else {
@@ -148,7 +148,7 @@ impl App {
         self.queue_edited();
     }
 
-    pub(super) fn queue_clear(self: &Rc<Self>) {
+    pub(in crate::app) fn queue_clear(self: &Rc<Self>) {
         {
             let mut state = self.state.borrow_mut();
             state.queue.clear_upcoming();
@@ -159,7 +159,7 @@ impl App {
         self.queue_edited();
     }
 
-    pub(super) fn queue_inserted(self: &Rc<Self>, index: usize) {
+    pub(in crate::app) fn queue_inserted(self: &Rc<Self>, index: usize) {
         let item = {
             let state = self.state.borrow();
             let Some(track) = state.queue.get(index) else {
@@ -174,7 +174,7 @@ impl App {
 
     /// Inserted in place so a selection or drag survives. Each index counts the
     /// rows put in before it, and all follow the current, so its highlight stays.
-    pub(super) fn queue_recommended(self: &Rc<Self>, before: u64, rows: &[usize]) {
+    pub(in crate::app) fn queue_recommended(self: &Rc<Self>, before: u64, rows: &[usize]) {
         let (current, len) = {
             let state = self.state.borrow();
             (state.queue.current_index(), state.queue.len())
@@ -224,7 +224,7 @@ impl App {
     }
 
     /// Drops the track queued in the player should it no longer be next.
-    pub(super) fn drop_stale_next(&self) {
+    pub(in crate::app) fn drop_stale_next(&self) {
         let stale = {
             let mut state = self.state.borrow_mut();
             let State {
@@ -245,7 +245,7 @@ impl App {
         }
     }
 
-    pub(super) fn save_queue_as_playlist(self: &Rc<Self>) {
+    pub(in crate::app) fn save_queue_as_playlist(self: &Rc<Self>) {
         let (ids, queued, thumb): (Vec<String>, bool, Option<String>) = {
             let state = self.state.borrow();
             let tracks: Vec<_> = state.queue.items().filter(|t| !t.is_local()).collect();
@@ -259,7 +259,7 @@ impl App {
             }
             return;
         }
-        let today = super::local_now();
+        let today = crate::app::local_now();
         let title = format!("Queue {} {} {}", today.day(), today.month(), today.year());
         self.toast(format!(
             "Saving {} as a playlist…",

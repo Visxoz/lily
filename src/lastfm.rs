@@ -237,13 +237,13 @@ fn session_path() -> PathBuf {
 
 /// The connected account, encrypted like the YouTube sign-in.
 pub fn load_session() -> Option<Session> {
-    serde_json::from_str(&crate::secret::read(&session_path())?).ok()
+    serde_json::from_str(&crate::platform::secret::read(&session_path())?).ok()
 }
 
 pub fn save_session(session: &Session) {
     let saved = serde_json::to_string(session)
         .map_err(std::io::Error::other)
-        .and_then(|json| crate::secret::write(&session_path(), &json));
+        .and_then(|json| crate::platform::secret::write(&session_path(), &json));
     if let Err(e) = saved {
         log::warn!("could not save the Last.fm account: {e}");
     }
