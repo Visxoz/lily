@@ -47,6 +47,9 @@ export component PageView inherits Rectangle {
         height: 420px;
         background: @linear-gradient(180deg, Theme.tint(root.tint) 0%, Theme.panel 100%);
         animate background { duration: 500ms; }
+        // Hidden under a header's blurred artwork, as it runs further down.
+        opacity: root.rows[0].backdrop.width > 0 ? 0 : 1;
+        animate opacity { duration: 400ms; }
     }
 
     // Beneath the page, and kept while the page fades in over it.

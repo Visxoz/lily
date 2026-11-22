@@ -227,20 +227,19 @@ impl App {
             });
         }
 
-        let accent_url = header_thumb.clone();
+        // Only called with an image, so with a URL.
+        let url = header_thumb.clone().unwrap_or_default();
         self.load_image(header_thumb, header_edge, move |app, image| {
             if app.state.borrow().page_generation != generation {
                 return;
             }
-            if let Some(color) = accent_url
-                .as_deref()
-                .and_then(|url| images::accent(url, header_edge))
-            {
+            if let Some(color) = images::accent(&url, header_edge) {
                 app.ui().set_accent(color);
             }
             if let Some(index) = app.find_row(RowKind::Header) {
                 let mut row = app.rows().row_data(index).unwrap_or_default();
                 row.art = image;
+                row.backdrop = images::backdrop(&url, header_edge).unwrap_or_default();
                 app.rows().set_row_data(index, row);
             }
         });

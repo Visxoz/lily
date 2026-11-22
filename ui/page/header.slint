@@ -1,7 +1,7 @@
 import { Icons, Theme } from "../theme.slint";
 import { Api, CardItem, RowItem } from "../types.slint";
 import { Art } from "../widgets/art.slint";
-import { IconButton, PillButton, PlayButton } from "../widgets/buttons.slint";
+import { ActionPill, IconButton, PillButton, PlayButton } from "../widgets/buttons.slint";
 import { MenuDivider, MenuEntry, PopupMenu } from "../widgets/menu.slint";
 import { Layout } from "layout.slint";
 
@@ -68,11 +68,65 @@ export component TopResult inherits Rectangle {
     }
 }
 
+component HeaderIcon inherits IconButton {
+    size: 40px;
+    icon-size: 24px;
+}
+
+/// A page header's buttons, beside its artwork or in a row beneath it.
+component HeaderActions inherits HorizontalLayout {
+    in property <RowItem> data;
+    /// The "more" button was clicked; where to open its menu, in window coordinates.
+    callback more(at: Point);
+    spacing: 12px;
+    alignment: start;
+    cross-axis-alignment: center;
+    if root.data.can-play: ActionPill {
+        primary: true;
+        icon: Icons.play;
+        text: "Play";
+        clicked => { Api.header-action("play"); }
+    }
+    if root.data.can-shuffle: ActionPill {
+        icon: Icons.shuffle;
+        text: "Shuffle";
+        clicked => { Api.header-action("shuffle"); }
+    }
+    if root.data.can-radio: HeaderIcon {
+        icon: Icons.radio;
+        clicked => { Api.header-action("radio"); }
+    }
+    if root.data.can-download: HeaderIcon {
+        icon: root.data.downloaded ? Icons.downloaded : Icons.download;
+        active: root.data.downloaded;
+        clicked => { Api.header-action("download"); }
+    }
+    if root.data.can-save: HeaderIcon {
+        icon: root.data.saved ? Icons.in-library : Icons.save-to-playlist;
+        active: root.data.saved;
+        accessible-role: button;
+        accessible-label: root.data.saved ? "Remove from library" : "Save to library";
+        accessible-action-default => { Api.header-action("save"); }
+        clicked => { Api.header-action("save"); }
+    }
+    if root.data.can-subscribe: PillButton {
+        text: root.data.subscribed ? "Subscribed" : "Subscribe";
+        primary: !root.data.subscribed;
+        clicked => { Api.header-action("subscribe"); }
+    }
+    if root.data.can-share: HeaderIcon {
+        icon: Icons.more;
+        clicked => { root.more({ x: self.absolute-position.x, y: self.absolute-position.y + self.height }); }
+    }
+}
+
 export component PageHeader {
     in property <RowItem> data;
     in property <length> full-width;
-    property <bool> has-art: root.data.art.width > 0 || root.data.can-play;
     property <length> art-height: Layout.header-art-height(root.data);
+    property <bool> inline: Layout.header-inline(root.data, root.width);
+    // The text sits level with the artwork's foot.
+    property <length> bottom: Layout.has-art(root.data) ? Layout.header-art-inset : 24px;
     property <length> title-size: root.data.title.character-count <= 12 ? 76px : root.data.title.character-count <= 18 ? 60px : root.data.title.character-count <= 28 ? 44px : 34px;
     // A banner is darkened behind its text, which stays white in every look.
     property <color> fg: root.data.banner ? Theme.on-colour : Theme.text;
@@ -80,6 +134,11 @@ export component PageHeader {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+
+    function open-menu(at: Point) {
+        root.menu-at = at;
+        menu.show();
+    }
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -142,31 +201,54 @@ export component PageHeader {
         }
     }
 
+    // The artwork blurred across the header, under its own copy.
+    if !root.data.banner: Rectangle {
+        x: -Theme.page-padding;
+        width: root.full-width;
+        height: root.height;
+        clip: true;
+        opacity: root.data.backdrop.width > 0 ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: 400ms; }
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.data.backdrop;
+            image-fit: cover;
+        }
+
+        // Washed towards the page so text reads in every look, then fading into it.
+        Rectangle {
+            background: @linear-gradient(180deg, Theme.panel.with-alpha(Theme.light ? 0.7 : 0.55) 45%, Theme.panel 100%);
+        }
+    }
+
     HorizontalLayout {
         y: 0;
         height: root.art-height;
-        padding-bottom: 24px;
-        spacing: 24px;
+        padding-bottom: root.bottom;
+        spacing: Layout.header-art-gap;
         alignment: start;
-        if root.has-art && !root.data.banner: Art {
-            y: parent.height - self.height - 24px;
-            width: 232px;
-            height: 232px;
+        if Layout.has-art(root.data): Art {
+            y: parent.height - self.height - root.bottom;
+            width: Layout.header-art;
+            height: Layout.header-art;
             source: root.data.art;
             round: root.data.round;
-            radius: 6px;
-            drop-shadow-blur: 40px;
-            drop-shadow-offset-y: 8px;
-            drop-shadow-color: #00000090;
+            radius: 8px;
+            drop-shadow-blur: 48px;
+            drop-shadow-offset-y: 12px;
+            drop-shadow-color: #00000099;
         }
         VerticalLayout {
             alignment: end;
-            spacing: 6px;
+            spacing: 4px;
             Text {
-                text: root.data.label;
-                font-size: 14px;
-                font-weight: 600;
-                color: root.fg;
+                text: root.data.label.to-uppercase();
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                color: root.fg-secondary;
             }
 
             Text {
@@ -174,7 +256,7 @@ export component PageHeader {
                 font-size: root.title-size;
                 font-weight: 800;
                 font-family: Theme.display-font;
-                letter-spacing: -1px;
+                letter-spacing: root.title-size * -0.02;
                 color: root.fg;
                 overflow: elide;
             }
@@ -190,9 +272,9 @@ export component PageHeader {
                     overflow: elide;
                 }
                 if root.data.subtitle != "" && root.data.meta != "": Text {
-                    text: "  •  ";
+                    text: " • ";
                     font-size: 14px;
-                    color: root.fg;
+                    color: root.fg-secondary;
                 }
                 if root.data.meta != "": Text {
                     text: root.data.meta;
@@ -201,61 +283,19 @@ export component PageHeader {
                     overflow: elide;
                 }
             }
+
+            if root.inline: HeaderActions {
+                padding-top: 16px;
+                data: root.data;
+                more(at) => { root.open-menu(at); }
+            }
         }
     }
 
-    if Layout.header-actions(root.data): HorizontalLayout {
+    if Layout.header-actions(root.data, root.width): HeaderActions {
         y: root.art-height;
         height: Layout.actions-height;
-        spacing: 20px;
-        alignment: start;
-        cross-axis-alignment: center;
-        if root.data.can-play: PlayButton {
-            size: 56px;
-            clicked => { Api.header-action("play"); }
-        }
-        if root.data.can-shuffle: IconButton {
-            icon: Icons.shuffle;
-            size: 48px;
-            icon-size: 30px;
-            clicked => { Api.header-action("shuffle"); }
-        }
-        if root.data.can-radio: IconButton {
-            icon: Icons.radio;
-            size: 48px;
-            icon-size: 28px;
-            clicked => { Api.header-action("radio"); }
-        }
-        if root.data.can-download: IconButton {
-            icon: root.data.downloaded ? Icons.downloaded : Icons.download;
-            active: root.data.downloaded;
-            size: 48px;
-            icon-size: 28px;
-            clicked => { Api.header-action("download"); }
-        }
-        if root.data.can-save: IconButton {
-            icon: root.data.saved ? Icons.in-library : Icons.save-to-playlist;
-            active: root.data.saved;
-            size: 48px;
-            icon-size: 28px;
-            accessible-role: button;
-            accessible-label: root.data.saved ? "Remove from library" : "Save to library";
-            accessible-action-default => { Api.header-action("save"); }
-            clicked => { Api.header-action("save"); }
-        }
-        if root.data.can-subscribe: PillButton {
-            text: root.data.subscribed ? "Subscribed" : "Subscribe";
-            primary: !root.data.subscribed;
-            clicked => { Api.header-action("subscribe"); }
-        }
-        if root.data.can-share: IconButton {
-            icon: Icons.more;
-            size: 48px;
-            icon-size: 28px;
-            clicked => {
-                root.menu-at = { x: self.absolute-position.x, y: self.absolute-position.y + self.height };
-                menu.show();
-            }
-        }
+        data: root.data;
+        more(at) => { root.open-menu(at); }
     }
 }

@@ -125,7 +125,7 @@ impl App {
                 ui.set_np_accent(color);
                 app.set_artwork_accent(images::vivid(color));
             }
-            ui.set_np_backdrop(images::backdrop(&url).unwrap_or_default());
+            ui.set_np_backdrop(images::backdrop(&url, images::PLAYER).unwrap_or_default());
         });
     }
 

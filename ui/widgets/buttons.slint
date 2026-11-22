@@ -71,7 +71,7 @@ export component PlayButton {
 
     circle := Rectangle {
         border-radius: self.height / 2;
-        background: touch.has-hover ? root.color.brighter(0.15) : root.color;
+        background: Theme.sheen(root.color);
         drop-shadow-blur: 12px;
         drop-shadow-offset-y: 4px;
         drop-shadow-color: #00000080;
@@ -80,11 +80,75 @@ export component PlayButton {
             duration: Theme.fast;
             easing: ease-out;
         }
-        animate background { duration: Theme.fast; }
+        Rectangle {
+            border-radius: self.height / 2;
+            background: touch.has-hover ? Theme.on-colour.with-alpha(0.12) : transparent;
+            animate background { duration: Theme.fast; }
+        }
+
         Icon {
             path: root.playing ? Icons.pause : Icons.play;
             size: root.size * 0.48;
             color: root.icon-color;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A labelled page header button: the accent for the main action, a tonal
+/// wash for the rest.
+export component ActionPill {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> primary;
+    // `readable` keeps the accent light enough in the dark looks for dark
+    // text to read on it, and dark enough in the light one for white.
+    property <color> fg: root.primary ? Theme.text-inverse : Theme.text;
+    callback clicked();
+    height: 48px;
+    width: content.preferred-width;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    Rectangle {
+        border-radius: self.height / 2;
+        background: root.primary
+            ? Theme.sheen(Theme.accent)
+            : Theme.hover;
+        transform-scale: touch.pressed ? 0.96 : touch.has-hover ? 1.03 : 1.0;
+        animate transform-scale {
+            duration: Theme.fast;
+            easing: ease-out;
+        }
+        Rectangle {
+            border-radius: self.height / 2;
+            background: !touch.has-hover ? transparent : root.primary ? Theme.on-colour.with-alpha(0.12) : Theme.ink.with-alpha(0.06);
+            animate background { duration: Theme.fast; }
+        }
+
+        content := HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 24px;
+            spacing: 8px;
+            alignment: center;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: root.icon;
+                size: 22px;
+                color: root.fg;
+            }
+            Text {
+                text: root.text;
+                vertical-alignment: center;
+                font-size: 15px;
+                font-weight: 700;
+                color: root.fg;
+            }
         }
     }
 

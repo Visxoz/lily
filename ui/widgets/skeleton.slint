@@ -84,9 +84,15 @@ export component PagePlaceholder inherits Placeholder {
     // A section title before the first row.
     property <bool> titled: !root.genre && !root.listed;
     property <length> art-height: root.listed ? Layout.header-height
-        : root.shape == "artist" ? Layout.banner-height : root.genre ? 160px : 0;
+        : root.played ? Layout.banner-height : root.genre ? 160px : 0;
+    // Buttons beside the artwork (`Layout.header-inline`) lift the title and its line.
+    property <bool> inline: root.listed && root.inner >= Layout.inline-actions-from;
+    property <length> lift: root.inline ? 68px : 0;
+    // The foot of the artwork, or of a banner's text.
+    property <length> foot: root.art-height - (root.listed ? Layout.header-art-inset : 24px);
+    property <length> title-x: root.listed ? root.pad + Layout.header-art + Layout.header-art-gap : root.pad;
     property <length> header: root.art-height
-        + (root.played ? Layout.actions-height : root.genre ? 8px : 0)
+        + (root.played && !root.inline ? Layout.actions-height : root.genre || root.inline ? 8px : 0)
         + (root.listed ? 52px : 0) + (root.greeted ? 76px : 0) + (root.titled ? 68px : 0)
         + (root.home ? root.shelf-height : 0)
         + (root.top-result ? 68px + Layout.top-height : 0);
@@ -101,39 +107,39 @@ export component PagePlaceholder inherits Placeholder {
         : root.genre ? root.shelf-height : 56px;
     property <int> fits: max(0, (root.height - root.header) / root.step + 1);
     property <int> count: root.charts ? min(10, root.fits) : root.fits;
-    property <length> title-x: root.listed ? root.pad + 256px : root.pad;
     // Past the number column, then the art unless numbered.
     property <length> text-x: root.pad + (root.numbered ? 56px : 108px);
 
     if root.listed: Block {
         x: root.pad;
-        y: Layout.header-height - 232px - 24px;
-        width: 232px;
-        height: 232px;
-        border-radius: 6px;
+        y: root.foot - self.height;
+        width: Layout.header-art;
+        height: Layout.header-art;
+        border-radius: 8px;
         pulse: root.pulse;
     }
     if root.art-height > 0: Block {
         x: root.title-x;
         // Lower with no line below it, as on Genre's.
-        y: root.art-height - (root.played ? 96px : 74px);
+        y: root.foot - (root.played ? 72px : 50px) - root.lift;
         width: min(360px, (root.width - self.x - root.pad) * 0.6);
         height: 44px;
         pulse: root.pulse;
     }
     if root.played: Block {
         x: root.title-x;
-        y: root.art-height - 40px;
+        y: root.foot - 16px - root.lift;
         width: min(200px, (root.width - self.x - root.pad) * 0.4);
         height: 14px;
         pulse: root.pulse;
     }
     if root.played: Block {
-        x: root.pad;
-        y: root.art-height + (Layout.actions-height - self.height) / 2;
-        width: 56px;
-        height: 56px;
-        border-radius: 28px;
+        x: root.inline ? root.title-x : root.pad;
+        y: root.inline ? root.foot - self.height : root.art-height + (Layout.actions-height - self.height) / 2;
+        // The Play pill.
+        width: 104px;
+        height: 48px;
+        border-radius: 24px;
         pulse: root.pulse;
     }
     if root.greeted: Block {

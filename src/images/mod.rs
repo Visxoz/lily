@@ -191,9 +191,10 @@ pub fn accent(url: &str, edge: u32) -> Option<Color> {
     CACHE.with(|c| c.borrow().accents.get(&key(url, edge)).copied())
 }
 
-/// The player artwork's colours where they sit in it, once loaded.
-pub fn backdrop(url: &str) -> Option<Image> {
-    CACHE.with(|c| c.borrow().backdrops.get(&key(url, PLAYER)).cloned())
+/// What is drawn behind artwork at `edge`, once loaded: the player's colours
+/// where they sit, or a page header's blurred copy.
+pub fn backdrop(url: &str, edge: u32) -> Option<Image> {
+    CACHE.with(|c| c.borrow().backdrops.get(&key(url, edge)).cloned())
 }
 
 fn key(url: &str, edge: u32) -> String {

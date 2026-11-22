@@ -29,7 +29,11 @@ pub(super) fn decode(bytes: &[u8], pixels: u32, edge: u32) -> Option<Decoded> {
     // Only artwork with something drawn behind it needs a colour picked.
     let small = matches!(edge, PLAYER | HEADER | BANNER).then(|| sample(&image));
     let accent = small.as_ref().map(accent_of);
-    let backdrop = small.as_ref().filter(|_| edge == PLAYER).map(backdrop_of);
+    let backdrop = match edge {
+        PLAYER => small.as_ref().map(backdrop_of),
+        HEADER => Some(blurred(&image)),
+        _ => None,
+    };
     // Consumes the image, so one already in RGBA is not copied first.
     let rgba = image.into_rgba8();
     let buffer = SharedPixelBuffer::clone_from_slice(rgba.as_raw(), rgba.width(), rgba.height());
@@ -156,6 +160,21 @@ fn backdrop_of(small: &image::RgbImage) -> Pixels {
     }
     pixels
 }
+
+/// A header's artwork, shrunk and blurred: cheap while small, and the GPU's
+/// stretch smooths it further.
+fn blurred(image: &image::DynamicImage) -> Pixels {
+    let small = image
+        .resize_to_fill(BLURRED.0, BLURRED.1, image::imageops::FilterType::Triangle)
+        .blur(BLUR_SIGMA)
+        .into_rgba8();
+    Pixels::clone_from_slice(small.as_raw(), small.width(), small.height())
+}
+
+/// A wide strip, about a page header's shape.
+const BLURRED: (u32, u32) = (192, 64);
+/// About 40 logical pixels across a page.
+const BLUR_SIGMA: f32 = 6.0;
 
 /// The least saturation `accent_of` gives, which greyish artwork gets.
 const MIN_ACCENT_SATURATION: f32 = 0.25;
@@ -379,6 +398,35 @@ mod tests {
         let fixed = readable(yellow, false);
         assert!(lum(fixed) <= 0.3, "dark enough behind white icons");
         assert!(fixed.red() > fixed.blue(), "keeps its hue");
+    }
+
+    #[test]
+    fn blurs_header_artwork_into_a_strip() {
+        // Red above and below a blue middle third.
+        let square = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(240, 240, |_, y| {
+            image::Rgb(if (80..160).contains(&y) {
+                [0, 0, 255]
+            } else {
+                [255, 0, 0]
+            })
+        }));
+        let pixels = blurred(&square);
+        assert_eq!((pixels.width(), pixels.height()), BLURRED);
+        let middle = pixels.as_slice()[(BLURRED.1 / 2 * BLURRED.0) as usize];
+        assert!(
+            middle.b > middle.r,
+            "the blue middle third stays in the middle"
+        );
+        let red = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            240,
+            240,
+            image::Rgb([200, 0, 0]),
+        ));
+        let corner = blurred(&red).as_slice()[0];
+        assert!(
+            corner.r >= 195 && corner.a == 255,
+            "edges don't darken: {corner:?}"
+        );
     }
 
     #[test]

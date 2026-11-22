@@ -9,8 +9,15 @@ export global Layout {
     out property <length> chip-height: 96px;
     out property <length> chip-gap: 16px;
     out property <length> header-height: 300px;
+    /// A non-banner header's artwork, centred in its height.
+    out property <length> header-art: 232px;
+    out property <length> header-art-inset: (root.header-height - root.header-art) / 2;
+    /// Between that artwork and the title.
+    out property <length> header-art-gap: 28px;
     out property <length> banner-height: 340px;
-    out property <length> actions-height: 96px;
+    out property <length> actions-height: 80px;
+    /// The least width that fits the buttons beside the artwork.
+    out property <length> inline-actions-from: 720px;
     out property <length> top-height: 236px;
 
     // Card height for a given card width: the artwork is the width less the
@@ -33,15 +40,29 @@ export global Layout {
         return max(1, floor((width + self.chip-gap) / (self.chip-min-width + self.chip-gap)));
     }
 
-    // A page header's height above its buttons: a banner, large artwork, or
-    // just the title.
+    // A page header's height, less any row of buttons beneath: a banner,
+    // artwork, or just the title.
     public pure function header-art-height(row: RowItem) -> length {
-        return row.banner ? self.banner-height : row.art.width > 0 || row.can-play ? self.header-height : 160px;
+        return row.banner ? self.banner-height : self.has-art(row) ? self.header-height : 160px;
+    }
+
+    // Whether a page header shows artwork (or its placeholder) beside the title.
+    public pure function has-art(row: RowItem) -> bool {
+        return !row.banner && (row.art.width > 0 || row.can-play);
+    }
+
+    public pure function header-buttons(row: RowItem) -> bool {
+        return row.can-play || row.can-radio || row.can-share || row.can-save || row.can-subscribe;
+    }
+
+    // Whether a page header's buttons fit under the title, beside the artwork.
+    public pure function header-inline(row: RowItem, inner: length) -> bool {
+        return self.header-buttons(row) && self.has-art(row) && inner >= self.inline-actions-from;
     }
 
     // Whether a page header has its row of buttons beneath it.
-    public pure function header-actions(row: RowItem) -> bool {
-        return row.can-play || row.can-radio || row.can-share || row.can-save || row.can-subscribe;
+    public pure function header-actions(row: RowItem, inner: length) -> bool {
+        return self.header-buttons(row) && !self.header-inline(row, inner);
     }
 }
 
@@ -52,7 +73,7 @@ export global Rows {
             return 76px;
         }
         if row.kind == RowKind.header {
-            return Layout.header-art-height(row) + (Layout.header-actions(row) ? Layout.actions-height : 8px);
+            return Layout.header-art-height(row) + (Layout.header-actions(row, inner) ? Layout.actions-height : 8px);
         }
         if row.kind == RowKind.title {
             return 68px;
