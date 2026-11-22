@@ -2,6 +2,8 @@
 
 <img src="docs/banner.svg" width="100%" alt="Lily: a native YouTube Music client for Windows">
 
+Your YouTube Music account on the Windows desktop: Home, playlists, likes and history, with downloads for offline, your own music files, a mini player, Last.fm scrobbling and your song on Discord.
+
 <br>
 
 [![Release](https://img.shields.io/github/v/release/Visxoz/lily?style=flat&labelColor=18181b&color=d65db1&label=release)](https://github.com/Visxoz/lily/releases/latest)
