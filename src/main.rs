@@ -27,7 +27,7 @@ use slint::{
         EventResult, WinitWindowAccessor,
         winit::{
             dpi,
-            event::{ElementState, TouchPhase, WindowEvent},
+            event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent},
             platform::windows::{IconExtWindows, WindowAttributesExtWindows},
             window::{Fullscreen, Icon, Window, WindowAttributes},
         },
@@ -134,10 +134,10 @@ fn keep_composed(window: &Window, size: dpi::PhysicalSize<u32>) {
     };
 }
 
-/// Keeps the full player composed, and closes the search box on a press
-/// outside it, as rows and cards take no focus; watched in winit's events so
-/// the press still does its own work. A window keeps one winit event filter,
-/// so other watchers belong in this one.
+/// Keeps the full player composed, closes the search box on a press outside
+/// it, as rows and cards take no focus, and ends a queue drag released off the
+/// panel; watched in winit's events so the press still does its own work. A
+/// window keeps one winit event filter, so other watchers belong in this one.
 fn watch_window_events(ui: &AppWindow) {
     let weak = ui.as_weak();
     let mut cursor = dpi::PhysicalPosition::new(0.0_f64, 0.0);
@@ -149,6 +149,24 @@ fn watch_window_events(ui: &AppWindow) {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 cursor = *position;
+                None
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            }
+            | WindowEvent::Touch(Touch {
+                phase: TouchPhase::Ended | TouchPhase::Cancelled,
+                ..
+            }) => {
+                // Once Slint has dispatched it, so a drop the panel took still lands.
+                let weak = weak.clone();
+                slint::Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.global::<Drag>().set_from(-1);
+                    }
+                });
                 None
             }
             WindowEvent::MouseInput {

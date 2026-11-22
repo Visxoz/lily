@@ -5,12 +5,13 @@ import { Icon, IconButton } from "../widgets/buttons.slint";
 import { MenuDivider, MenuEntry, PopupMenu } from "../widgets/menu.slint";
 import { Equalizer } from "../widgets/spinner.slint";
 
-/// The queue row being dragged, where it would land, and whether it is
-/// near or past the list's top (-1) or bottom (1) edge, so the list scrolls.
+/// The dragged queue row and its song, the pointer's window y and where the row
+/// was grabbed; not kept in the row, which the list drops once scrolled away.
 export global Drag {
     in-out property <int> from: -1;
-    in-out property <int> target;
-    in-out property <int> edge;
+    in-out property <string> song;
+    in-out property <length> pointer;
+    in-out property <length> grab;
 }
 
 export component PanelAction inherits Text {
@@ -28,13 +29,10 @@ export component PanelAction inherits Text {
 export component QueueRow inherits Rectangle {
     in property <QueueItem> item;
     in property <int> index;
-    in property <int> count;
     /// How many rows are selected; actions on a selected row apply to all.
     in property <int> selected-count;
-    /// The list's scroll offset and visible height, to follow the pointer
-    /// as the list scrolls under it.
-    in property <length> scroll;
-    in property <length> viewport;
+    /// The copy carried under the pointer.
+    in property <bool> ghost;
     /// The panel is open, which a closed one keeps its rows through.
     in property <bool> shown;
     callback clicked(control: bool, shift: bool);
@@ -42,24 +40,31 @@ export component QueueRow inherits Rectangle {
     callback remove-selected();
     callback play-next();
     callback play-next-selected();
-    callback drag-to(target: int);
+    callback dropped();
+    callback wheel(delta: length);
     property <bool> many: root.item.selected && root.selected-count > 1;
     /// One song's YouTube actions, which a local file has none of.
     property <bool> youtube: Api.signed-in && !root.many && !root.item.local;
+    /// This row started the drag and still has the pointer.
     property <bool> dragging;
+    // Ended elsewhere, as by the queue changing under it.
+    property <bool> drag-live: Drag.from >= 0;
+    changed drag-live => {
+        if !self.drag-live {
+            root.dragging = false;
+        }
+    }
+    // Its place stays empty while carried.
+    property <bool> dragged: !root.ghost && Drag.from == root.index;
     property <length> pressed-y;
     /// Pressed here: closing a menu takes the press, and its release alone isn't a click.
     property <bool> held;
-    /// Where the pointer is in the list's viewport.
-    property <length> pointer-y;
-    property <int> target: clamp(floor((root.pointer-y - root.scroll) / Theme.queue-row), 0, root.count - 1);
     // The remove button counts as hovering the row, or they would flicker;
     // nothing is hot while a row is dragged over the others.
     property <bool> hot: (touch.has-hover || remove-button.has-hover) && Drag.from < 0;
     // As `PageRow`'s.
     property <string> art-key: root.shown && root.item.art.width == 0 ? "\{root.index}/\{root.item.id}" : "";
     height: Theme.queue-row;
-    z: root.dragging ? 1 : 0;
 
     function ask-art() {
         if root.art-key != "" {
@@ -68,18 +73,6 @@ export component QueueRow inherits Rectangle {
     }
     init => { root.ask-art(); }
     changed art-key => { root.ask-art(); }
-
-    function track-pointer() {
-        root.pointer-y = root.y + root.scroll + touch.mouse-y;
-        Drag.edge = root.pointer-y < 24px ? -1 : root.pointer-y > root.viewport - 24px ? 1 : 0;
-        Drag.target = root.target;
-    }
-
-    function stop-dragging() {
-        root.dragging = false;
-        Drag.from = -1;
-        Drag.edge = 0;
-    }
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
@@ -155,11 +148,19 @@ export component QueueRow inherits Rectangle {
     }
 
     touch := TouchArea {
+        enabled: !root.ghost;
         mouse-cursor: root.dragging ? MouseCursor.grabbing : MouseCursor.pointer;
         pointer-event(ev) => {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up && !root.dragging {
                 root.menu-at = { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y };
                 menu.show();
+            }
+            // Sent with no button, as the grab is lost.
+            if ev.kind == PointerEventKind.cancel {
+                root.dragging = false;
+                root.held = false;
+                Drag.from = -1;
+                return;
             }
             if ev.button != PointerEventButton.left {
                 return;
@@ -169,34 +170,42 @@ export component QueueRow inherits Rectangle {
                 root.held = true;
             } else if ev.kind == PointerEventKind.up {
                 if root.dragging {
-                    root.stop-dragging();
-                    root.drag-to(root.target);
+                    root.dragging = false;
+                    root.dropped();
                 } else if root.held {
                     root.clicked(ev.modifiers.control, ev.modifiers.shift);
                 }
                 root.held = false;
-            } else if ev.kind == PointerEventKind.cancel {
-                root.stop-dragging();
-                root.held = false;
             }
+        }
+        // The pressed row has the pointer, so the list would get no wheel.
+        scroll-event(ev) => {
+            if root.dragging {
+                root.wheel(ev.delta-y);
+                return accept;
+            }
+            reject
         }
         moved => {
             if !root.dragging && self.pressed && abs(self.mouse-y - root.pressed-y) > 6px {
                 root.dragging = true;
+                // Its release is a drop, never a click.
+                root.held = false;
+                Drag.grab = root.pressed-y;
+                Drag.song = root.item.id;
                 Drag.from = root.index;
             }
             if root.dragging {
-                root.track-pointer();
+                Drag.pointer = self.absolute-position.y + self.mouse-y;
             }
         }
     }
 
-    // Follows the pointer while dragged; otherwise sits in the row.
     Rectangle {
-        y: root.dragging ? root.pointer-y - root.scroll - root.y - root.pressed-y : 0;
+        opacity: root.dragged ? 0 : 1;
         border-radius: 6px;
-        background: root.dragging ? Theme.menu : root.item.selected ? Theme.highlight : root.hot ? Theme.hover : transparent;
-        drop-shadow-blur: root.dragging ? 16px : 0;
+        background: root.ghost ? Theme.menu : root.item.selected ? Theme.highlight : root.hot ? Theme.hover : transparent;
+        drop-shadow-blur: root.ghost ? 16px : 0;
         drop-shadow-color: #00000080;
         animate background { duration: Theme.fast; }
 

@@ -34,6 +34,13 @@ export component SidePanel inherits Rectangle {
     callback lyric-clicked(index: int);
     callback close();
     property <int> tab: root.full-player ? 0 : root.panel-tab;
+    // An edit that moves the dragged song elsewhere ends the drag.
+    property <bool> drag-lost: Drag.from >= 0 && root.queue[Drag.from].id != Drag.song;
+    changed drag-lost => {
+        if self.drag-lost {
+            Drag.from = -1;
+        }
+    }
 
     width: root.shown ? Theme.right-panel : 0px;
     animate width {
@@ -128,44 +135,81 @@ export component SidePanel inherits Rectangle {
                     }
                 }
 
-                if root.queue.length > 0: Rectangle {
+                if root.queue.length > 0: list-area := Rectangle {
                     vertical-stretch: 1;
+                    // The pointer below the list's top, and the row it would land on.
+                    property <length> drag-y: Drag.pointer - self.absolute-position.y;
+                    property <int> target: clamp(floor((self.drag-y - queue-list.content-y) / Theme.queue-row), 0, root.queue.length - 1);
+                    // Near or past the top (-1) or bottom (1), which the Timer scrolls for.
+                    property <int> edge: Drag.from < 0 ? 0
+                        : self.drag-y < 24px ? -1 : self.drag-y > self.height - 24px ? 1 : 0;
+
+                    function drop() {
+                        if Drag.from >= 0 {
+                            root.queue-move(Drag.from, self.target);
+                            Drag.from = -1;
+                        }
+                    }
+
                     queue-list := ListView {
                         for item[i] in root.queue: QueueRow {
                             x: 8px;
                             width: queue-list.visible-width - 16px;
                             item: item;
                             index: i;
-                            count: root.queue.length;
                             selected-count: root.queue-selected;
-                            scroll: queue-list.content-y;
-                            viewport: queue-list.visible-height;
                             shown: root.shown;
                             clicked(control, shift) => { root.queue-clicked(i, control, shift); }
                             remove => { root.queue-remove(i); }
                             remove-selected => { root.queue-remove-selected(); }
                             play-next => { root.queue-play-next(i); }
                             play-next-selected => { root.queue-play-next-selected(); }
-                            drag-to(target) => { root.queue-move(i, target); }
+                            dropped => { list-area.drop(); }
+                            wheel(delta) => { queue-list.glide-by(delta); }
                         }
-                    }
-
-                    // Where the dragged row will land.
-                    if Drag.from >= 0: Rectangle {
-                        x: 8px;
-                        y: queue-list.content-y + (Drag.target + (Drag.target > Drag.from ? 1 : 0)) * Theme.queue-row - 1px;
-                        width: queue-list.visible-width - 16px;
-                        height: 2px;
-                        background: Theme.accent;
                     }
 
                     // Scrolls the list while a row is dragged past its edge.
                     Timer {
                         interval: 16ms;
-                        running: Drag.from >= 0 && Drag.edge != 0;
+                        running: list-area.edge != 0;
                         triggered => {
-                            queue-list.content-y = clamp(queue-list.content-y - Drag.edge * 8px,
+                            queue-list.content-y = clamp(queue-list.content-y - list-area.edge * 8px,
                                 min(0px, queue-list.visible-height - queue-list.content-height), 0px);
+                        }
+                    }
+
+                    // The dragged song, kept should the list drop its row.
+                    if Drag.from >= 0: QueueRow {
+                        x: 8px;
+                        y: list-area.drag-y - Drag.grab;
+                        width: queue-list.visible-width - 16px;
+                        item: root.queue[Drag.from];
+                        ghost: true;
+                    }
+
+                    // Where the dragged row will land.
+                    if Drag.from >= 0: Rectangle {
+                        x: 8px;
+                        y: queue-list.content-y + (list-area.target + (list-area.target > Drag.from ? 1 : 0)) * Theme.queue-row - 1px;
+                        width: queue-list.visible-width - 16px;
+                        height: 2px;
+                        background: Theme.accent;
+                    }
+
+                    // Takes the pointer once the list drops the dragged row; `main` ends a drag released off the panel.
+                    if Drag.from >= 0: TouchArea {
+                        x: root.absolute-position.x - list-area.absolute-position.x;
+                        y: root.absolute-position.y - list-area.absolute-position.y;
+                        width: root.width;
+                        height: root.height;
+                        mouse-cursor: grabbing;
+                        pointer-event(ev) => {
+                            if ev.kind == PointerEventKind.move {
+                                Drag.pointer = self.absolute-position.y + self.mouse-y;
+                            } else if ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left {
+                                list-area.drop();
+                            }
                         }
                     }
                 }

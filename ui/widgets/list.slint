@@ -74,18 +74,23 @@ export component ListView {
     preferred-width: 100%;
     accessible-role: list;
 
-    // Rows ignore the wheel and the Flickable has nothing of its own to
-    // scroll, so wheel events reach this TouchArea.
+    /// Glides by a wheel's `delta`; false if there is nowhere to go.
+    public function glide-by(delta: length) -> bool {
+        if delta == 0 || root.max-scroll <= 0 {
+            return false;
+        }
+        root.glide-to = max(-root.max-scroll, min(0px, (root.gliding ? root.glide-to : root.content-y) + delta));
+        root.glide-from = root.content-y;
+        root.glide-start = animation-tick();
+        root.gliding = true;
+        true
+    }
+
+    // Rows ignore the wheel (a dragged one hands it to `glide-by`) and the
+    // Flickable has nothing of its own to scroll, so wheel events reach this TouchArea.
     TouchArea {
         scroll-event(ev) => {
-            if ev.delta-y == 0 || root.max-scroll <= 0 {
-                return reject;
-            }
-            root.glide-to = max(-root.max-scroll, min(0px, (root.gliding ? root.glide-to : root.content-y) + ev.delta-y));
-            root.glide-from = root.content-y;
-            root.glide-start = animation-tick();
-            root.gliding = true;
-            accept
+            root.glide-by(ev.delta-y) ? EventResult.accept : EventResult.reject
         }
 
         flick := Flickable {

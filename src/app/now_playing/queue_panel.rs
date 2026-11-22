@@ -2,8 +2,9 @@
 
 use std::rc::Rc;
 
-use slint::Model;
+use slint::{ComponentHandle, Model};
 
+use crate::Drag;
 use crate::api::{self, Card, CardKind, Route};
 use crate::app::{App, State, now_playing::queue_item};
 
@@ -189,6 +190,8 @@ impl App {
             return;
         }
         let mut selection = self.selection.get();
+        let ui = self.ui();
+        let mut dragged = ui.global::<Drag>().get_from();
         {
             let state = self.state.borrow();
             for &i in rows {
@@ -202,10 +205,14 @@ impl App {
                 {
                     *anchor += 1;
                 }
+                if dragged >= i as i32 {
+                    dragged += 1;
+                }
             }
             self.queue_shown.set(Some(state.queue.revision()));
         }
         self.selection.set(selection);
+        ui.global::<Drag>().set_from(dragged);
     }
 
     /// After rows changed in place, so the model is at the queue's revision.
