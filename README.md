@@ -38,7 +38,7 @@
 <td width="33%" valign="top">
 
 ### Sounds better
-256 kbps Opus with Premium, gapless playback, a crossfade of your chosen length, volume levelling, a ten-band equaliser, and crossfeed, mono and balance for headphones.
+256 kbps Opus with Premium, gapless playback, a crossfade of your chosen length or Automix's DJ-style blends, volume levelling, a ten-band equaliser, and crossfeed, mono and balance for headphones.
 
 </td>
 <td width="33%" valign="top">
@@ -155,6 +155,7 @@ Lily starts in pure black with its own orchid. Pick another look and accent in *
 | **Premium streams** | Signed in with Premium on High, songs play in YouTube's 256 kbps formats, and the player bar says so. Music videos swap to their song versions to get them. |
 | **Gapless** | The next song is lined up 15 seconds early and follows without a gap, and the screen changes the moment the sound does. |
 | **Crossfade** | Fades each song into the next over 1 to 12 seconds (6 by default), cutting the silence at the joins. An album played in order still runs straight on, and skipping never fades. |
+| **Automix** | In place of the crossfade, blends each song into the next like a DJ: over a fade-out or a quiet intro, on the beat when the tempos match, one bass line at a time. An album played in order still runs straight on. |
 | **Equaliser** | Ten bands from 31 Hz to 16 kHz, ±12 dB each, with presets: Flat, Bass boost, Treble boost, Vocal, Rock, Electronic and Acoustic. Boosting turns the rest down to leave headroom. |
 | **Normalise volume** | Plays every track at a similar loudness, from YouTube's own measurement: loud ones turned down and quiet ones up, at Normal or a Quiet level 6 dB lower, with a limiter so nothing clips. |
 | **For headphones** | Crossfeed blends a little of each side into the other, as speakers do. Mono is there for one earbud, and a balance slider for everything else. |
