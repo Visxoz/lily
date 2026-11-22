@@ -136,6 +136,7 @@ export component SettingsDialog inherits Dialog {
     in property <bool> crossfade;
     in property <[string]> crossfade-lengths;
     in property <int> crossfade-secs;
+    in property <bool> automix;
     in property <bool> pause-on-unplug;
     in property <[string]> output-devices;
     in property <int> output-device;
@@ -173,6 +174,7 @@ export component SettingsDialog inherits Dialog {
     callback set-normalise(value: int);
     callback set-crossfade(value: bool);
     callback set-crossfade-secs(index: int);
+    callback set-automix(value: bool);
     callback set-pause-on-unplug(value: bool);
     callback set-output-device(index: int);
     callback list-output-devices();
@@ -241,7 +243,15 @@ export component SettingsDialog inherits Dialog {
             }
         }
 
-        SettingRow {
+        ToggleRow {
+            label: "Automix";
+            detail: "Blends each track into the next as a DJ would: over a fade-out or a quiet intro, on the beat when tempos agree, one bass at a time. Tracks of an album played in order still run straight on.";
+            checked: root.automix;
+            toggled(v) => { root.set-automix(v); }
+        }
+
+        // Automix blends in its place.
+        if !root.automix: SettingRow {
             label: "Crossfade";
             detail: "Fades each track into the next. Tracks of an album played in order still run straight on.";
             if root.crossfade: ChoiceButton {

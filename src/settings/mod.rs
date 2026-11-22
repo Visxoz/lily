@@ -200,6 +200,8 @@ pub struct Settings {
     pub no_premium: bool,
     pub crossfade: bool,
     pub crossfade_secs: f32,
+    /// Blends tracks by their sound, in place of the crossfade.
+    pub automix: bool,
     /// Pauses as the device playing is unplugged, rather than carrying on
     /// through the default.
     pub pause_on_unplug: bool,
@@ -305,6 +307,7 @@ impl Default for Settings {
             crossfade: false,
             // Long enough to blend two songs, short enough to keep most of an ending.
             crossfade_secs: 6.0,
+            automix: false,
             pause_on_unplug: true,
             speed: 1.0,
             close_to_tray: true,
@@ -377,6 +380,19 @@ impl Settings {
         self.equaliser.then_some(self.equaliser_gains)
     }
 
+    /// How a track moves into the next, as set; the caller keeps an album in
+    /// order gapless.
+    pub fn transition(&self) -> crate::audio::Transition {
+        use crate::audio::Transition;
+        if self.automix {
+            Transition::Automix
+        } else if self.crossfade {
+            Transition::Crossfade(f64::from(self.crossfade_secs))
+        } else {
+            Transition::Gapless
+        }
+    }
+
     pub fn set_shuffle(&mut self, on: bool) {
         self.shuffle = on;
         if !on {
@@ -431,6 +447,7 @@ mod tests {
         assert_eq!(settings.volume, 0.5);
         assert_eq!(settings.normalise, crate::audio::Normalise::Normal);
         assert!(!settings.crossfade, "off until chosen");
+        assert!(!settings.automix, "off until chosen");
         assert!(
             CROSSFADE_SECS.contains(&settings.crossfade_secs),
             "a length Settings offers"

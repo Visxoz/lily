@@ -144,12 +144,14 @@ impl App {
             app.warm_premium();
         });
         on!(on_set_crossfade, |app, value| app
-            .change_crossfade(|s| s.crossfade = value));
+            .change_transition(|s| s.crossfade = value));
         on!(on_set_crossfade_secs, |app, index| {
             if let Some(&secs) = crate::settings::CROSSFADE_SECS.get(index as usize) {
-                app.change_crossfade(|s| s.crossfade_secs = secs);
+                app.change_transition(|s| s.crossfade_secs = secs);
             }
         });
+        on!(on_set_automix, |app, value| app
+            .change_transition(|s| s.automix = value));
         on!(on_set_pause_on_unplug, |app, value| {
             app.update_settings(|s| s.pause_on_unplug = value);
             app.player.set_pause_on_unplug(value);

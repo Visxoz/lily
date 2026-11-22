@@ -1,10 +1,10 @@
 use std::{rc::Rc, time::Instant};
 
-use crate::app::App;
-use crate::{api::Track, audio::SILENCE_TRIM_SECS, settings::Settings};
+use crate::app::{App, State};
+use crate::{api::Track, audio::Transition, settings::Settings};
 
 /// Time for the next stream to start downloading and its decoder to open. A
-/// crossfade adds its length and trimmed silence, as the player holds that back.
+/// crossfade or Automix adds what the player holds back for it.
 const GAPLESS_LEAD_SECS: f64 = 15.0;
 
 /// Whether `next` follows `current` on its album, which is often written to
@@ -19,8 +19,17 @@ fn in_album_order(current: Option<&Track>, next: &Track) -> bool {
     })
 }
 
+/// How the next track comes in, read again as its stream arrives, so a
+/// toggle meanwhile counts.
+fn next_transition(state: &State) -> Transition {
+    match state.queue.peek_next() {
+        Some(next) if !in_album_order(state.queue.current(), next) => state.settings.transition(),
+        _ => Transition::Gapless,
+    }
+}
+
 impl App {
-    pub(in crate::app) fn change_crossfade(&self, change: impl FnOnce(&mut Settings)) {
+    pub(in crate::app) fn change_transition(&self, change: impl FnOnce(&mut Settings)) {
         self.update_settings(change);
         // A track queued with the old setting is queued again.
         self.state.borrow_mut().playback.unqueue();
@@ -33,20 +42,9 @@ impl App {
             let state = self.state.borrow();
             let playback = &state.playback;
             let next = state.queue.peek_next();
-            let crossfade = if state.settings.crossfade
-                && next.is_some_and(|next| !in_album_order(state.queue.current(), next))
-            {
-                f64::from(state.settings.crossfade_secs)
-            } else {
-                0.0
-            };
-            // Opening takes clock time; the fade and trim are in song time.
-            let open = GAPLESS_LEAD_SECS * f64::from(state.settings.speed);
-            let lead = if crossfade > 0.0 {
-                open + crossfade + SILENCE_TRIM_SECS
-            } else {
-                open
-            };
+            let transition = next_transition(&state);
+            // Opening takes clock time; what is held is in song time.
+            let lead = GAPLESS_LEAD_SECS * f64::from(state.settings.speed) + transition.hold_secs();
             let next = next.map(|t| t.id.as_str());
             let stale = playback
                 .queued
@@ -56,16 +54,21 @@ impl App {
                 && playback.duration > 0.0
                 && playback.duration - position <= lead
                 && (playback.queued.is_none() || stale);
+            // One still prefetching is taken from `prefetched` once it lands.
             let due = next
-                .filter(|id| near_end && playback.queue_tried.as_deref() != Some(*id))
-                .map(|id| (id.to_owned(), crossfade));
+                .filter(|id| {
+                    near_end
+                        && playback.queue_tried.as_deref() != Some(*id)
+                        && !playback.prefetching.contains(*id)
+                })
+                .map(str::to_owned);
             (stale, due, playback.generation)
         };
         if stale {
             self.state.borrow_mut().playback.unqueue();
             self.player.clear_next();
         }
-        let Some((next_id, crossfade)) = due else {
+        let Some(next_id) = due else {
             return;
         };
         // On repeat-one, the player's download plays again.
@@ -86,8 +89,9 @@ impl App {
             };
             match result {
                 Ok(stream) if still_next => {
+                    let transition = next_transition(&app.state.borrow());
                     app.player
-                        .queue_next(app.stream_spec(&next_id, stream.clone(), 0.0), crossfade);
+                        .queue_next(app.stream_spec(&next_id, stream.clone(), 0.0), transition);
                     let playback = &mut app.state.borrow_mut().playback;
                     playback.queued = Some((next_id, stream, resolved_at));
                     playback.queued_failed = false;

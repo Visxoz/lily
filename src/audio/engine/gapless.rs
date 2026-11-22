@@ -11,9 +11,12 @@ use std::{
     thread,
 };
 
-use super::{BUFFER_AHEAD_SECS, Engine, Track};
+use super::{
+    BUFFER_AHEAD_SECS, Engine, Track,
+    automix::{self, Analysis, Trade},
+};
 use crate::audio::{
-    Opening, PlayerEvent, SILENCE_TRIM_SECS,
+    Opening, PlayerEvent, SILENCE_TRIM_SECS, Transition,
     decode::{Decoded, Decoder},
     loudness_gain,
     opus::MAX_FRAME,
@@ -37,14 +40,18 @@ pub(super) struct Next {
     /// Samples of the current track held back for the fade and its trailing
     /// silence: none for gapless, or a format that cannot be mixed in.
     hold: usize,
+    /// A crossfade's length in samples; Automix plans its own.
     fade: usize,
 }
 
 pub(super) struct Opened {
     decoder: Decoder,
-    /// The first samples after the leading silence cut for a crossfade.
+    /// The first samples after the leading silence cut for a crossfade, and
+    /// for Automix its whole intro.
     lead: Vec<f32>,
     skipped_secs: f64,
+    /// The intro analysed, for Automix only.
+    intro: Option<Analysis>,
 }
 
 /// The end of the track fading out, mixed under the start of the next.
@@ -55,6 +62,8 @@ pub(super) struct Fade {
     /// The fading track's loudness correction over the next one's, as the
     /// device applies the next one's to the mix.
     old_gain: f32,
+    /// Automix's bass trade.
+    trade: Option<Trade>,
 }
 
 impl Fade {
@@ -79,6 +88,15 @@ impl Fade {
             let t = (self.mixed + i * self.channels) as f32 / len;
             let (fade_in, fade_out) = (t * FRAC_PI_2).sin_cos();
             let fade_out = fade_out * self.old_gain;
+            if let Some(trade) = &mut self.trade {
+                trade.mix(
+                    self.mixed / self.channels + i,
+                    new,
+                    old,
+                    (fade_in, fade_out),
+                );
+                continue;
+            }
             for (sample, old) in new.iter_mut().zip(old) {
                 *sample = *sample * fade_in + old * fade_out;
             }
@@ -110,77 +128,86 @@ fn is_silent(frame: &[f32]) -> bool {
     frame.iter().all(|s| s.abs() < SILENCE)
 }
 
-/// Splits off the last `fade` samples before the trailing silence (at most
-/// `trim` of it cut) and moves the rest to `out`. The tail keeps the held
-/// buffer, so nothing is allocated. With no fade, nothing is cut.
-fn take_tail(
-    held: &mut VecDeque<f32>,
-    out: &mut VecDeque<f32>,
-    channels: usize,
-    fade: usize,
-    trim: usize,
-) -> VecDeque<f32> {
-    if fade > 0 {
-        let silent = held
-            .make_contiguous()
-            .rchunks_exact(channels)
-            .take(trim / channels)
-            .take_while(|f| is_silent(f))
-            .count();
-        held.truncate(held.len() - silent * channels);
-    }
-    let start = held.len().saturating_sub(fade);
-    out.extend(held.drain(..start));
-    std::mem::take(held)
+/// Cuts the trailing silence from `held`, at most `trim` samples of it.
+fn trim_silence(held: &mut VecDeque<f32>, channels: usize, trim: usize) {
+    let silent = held
+        .make_contiguous()
+        .rchunks_exact(channels)
+        .take(trim / channels)
+        .take_while(|f| is_silent(f))
+        .count();
+    held.truncate(held.len() - silent * channels);
 }
 
-/// Opens the queued track and, for a crossfade, decodes up to its first
-/// sound, so the fade brings in music rather than silence.
-fn open_next(reader: StreamReader, mime: &str, trim: bool) -> Result<Opened, String> {
+/// Opens the queued track off the engine thread and, unless gapless, decodes
+/// up to its first sound, so the blend brings in music rather than silence;
+/// Automix decodes on through the intro and analyses it.
+fn open_next(reader: StreamReader, mime: &str, transition: Transition) -> Result<Opened, String> {
     let mut decoder = Decoder::open(reader, mime)?;
+    let (rate, channels) = (decoder.rate, decoder.channels);
+    let wanted = samples_in(automix::INTRO_SECS, rate, channels);
     let mut lead = Vec::new();
+    if transition == Transition::Automix {
+        // Sized once, as doubling would leave up to half of it unused.
+        lead.reserve_exact(wanted + MAX_FRAME * channels);
+    }
     let mut skipped = 0;
-    if trim {
-        let limit = (SILENCE_TRIM_SECS * f64::from(decoder.rate)) as usize;
+    if transition != Transition::Gapless {
+        let limit = (SILENCE_TRIM_SECS * f64::from(rate)) as usize;
         while lead.is_empty() && skipped < limit {
             if let Decoded::EndOfStream = decoder.decode_next(&mut lead)? {
                 break;
             }
             let silent = lead
-                .chunks_exact(decoder.channels)
+                .chunks_exact(channels)
                 .take(limit - skipped)
                 .take_while(|f| is_silent(f))
                 .count();
-            lead.drain(..silent * decoder.channels);
+            lead.drain(..silent * channels);
             skipped += silent;
         }
     }
+    let intro = if transition == Transition::Automix {
+        while lead.len() < wanted {
+            if let Decoded::EndOfStream = decoder.decode_next(&mut lead)? {
+                break;
+            }
+        }
+        Some(automix::analyse(&lead, rate, channels))
+    } else {
+        None
+    };
     Ok(Opened {
-        skipped_secs: skipped as f64 / f64::from(decoder.rate),
+        skipped_secs: skipped as f64 / f64::from(rate),
         decoder,
         lead,
+        intro,
     })
 }
 
 impl Engine {
-    pub(super) fn queue(&mut self, opening: Opening, download: Arc<Download>, crossfade_secs: f64) {
+    pub(super) fn queue(
+        &mut self,
+        opening: Opening,
+        download: Arc<Download>,
+        transition: Transition,
+    ) {
         self.drop_next();
         let (rate, channels) = {
             let output = self.shared.output.lock().unwrap();
             (output.rate, output.channels)
         };
-        let fade = samples_in(crossfade_secs, rate, channels);
-        let hold = if fade > 0 {
-            fade + samples_in(SILENCE_TRIM_SECS, rate, channels)
-        } else {
-            0
-        };
+        let hold = samples_in(transition.hold_secs(), rate, channels);
         // Sized once, as growing by doubling would overshoot by up to half,
-        // with room for the packet that lands before the excess spills.
-        let room = if hold > 0 {
-            hold + MAX_FRAME * channels
-        } else {
-            0
+        // with room for the packet that lands before the excess spills, and
+        // for Automix's intro, which joins what is held at the switch.
+        let (fade, room) = match transition {
+            Transition::Gapless => (0, 0),
+            Transition::Crossfade(secs) => (
+                samples_in(secs, rate, channels),
+                hold + MAX_FRAME * channels,
+            ),
+            Transition::Automix => (0, hold + samples_in(automix::INTRO_SECS, rate, channels)),
         };
         self.held
             .reserve_exact(room.saturating_sub(self.held.len()));
@@ -190,7 +217,7 @@ impl Engine {
         let spawned = thread::Builder::new()
             .name("next-track".into())
             .spawn(move || {
-                let _ = tx.send(open_next(reader, &mime, fade > 0));
+                let _ = tx.send(open_next(reader, &mime, transition));
             });
         if let Err(e) = spawned {
             log::warn!("could not open the next track: {e}");
@@ -240,7 +267,7 @@ impl Engine {
 
     /// Moves decoding on to the queued track once the current one is fully
     /// decoded. Of the same format, its samples follow straight on, mixed
-    /// over the current track's held tail for a crossfade; otherwise the
+    /// over the current track's held tail for a crossfade or Automix; otherwise the
     /// device reopens once the current track has played out.
     pub(super) fn try_switch(&mut self) {
         let finished = self.track.as_ref().is_some_and(|t| t.finished);
@@ -248,15 +275,15 @@ impl Engine {
         if !finished || !ready || self.previous.is_some() {
             return;
         }
-        // Lined up before the output is locked, which the device callback
-        // waits on; only what plays before the fade still moves under it.
-        self.held.make_contiguous();
-        let mut output = self.shared.output.lock().unwrap();
-        let opened = self.next.as_ref().and_then(|n| n.ready.as_ref());
-        let same_format = opened.is_some_and(|o| same_format(&o.decoder, &output));
-        if !same_format && !(output.samples.is_empty() && self.held.is_empty()) {
-            return;
-        }
+        let same_format = {
+            let output = self.shared.output.lock().unwrap();
+            let opened = self.next.as_ref().and_then(|n| n.ready.as_ref());
+            let same_format = opened.is_some_and(|o| same_format(&o.decoder, &output));
+            if !same_format && !(output.samples.is_empty() && self.held.is_empty()) {
+                return;
+            }
+            same_format
+        };
         let Some(Next {
             download,
             loudness,
@@ -266,6 +293,7 @@ impl Engine {
                     decoder,
                     mut lead,
                     skipped_secs,
+                    intro,
                 }),
             ..
         }) = self.next.take()
@@ -280,9 +308,12 @@ impl Engine {
             started: true,
         };
         if same_format {
-            let trim = samples_in(SILENCE_TRIM_SECS, rate, channels);
-            let tail = take_tail(&mut self.held, &mut output.samples, channels, fade, trim);
-            let queued = (output.samples.len() / channels) as u64;
+            // Planned before locking the output, which the device callback
+            // waits on. What plays before the fade stays held, to spill.
+            let (fade, trade) = self.plan_fade(fade, intro.as_ref(), rate, channels);
+            let tail = self.held.split_off(self.held.len().saturating_sub(fade));
+            let mut output = self.shared.output.lock().unwrap();
+            let queued = ((output.samples.len() + self.held.len()) / channels) as u64;
             output.switch_at = Some(output.frames_played + queued);
             output.next_loudness = loudness;
             output.next_base_secs = skipped_secs;
@@ -293,11 +324,11 @@ impl Engine {
                     channels,
                     mixed: 0,
                     old_gain: self.shared.loudness() / self.shared.correction(loudness),
+                    trade,
                 });
             }
             self.previous = self.track.replace(track);
         } else {
-            drop(output);
             if let Err(e) = self.ensure_stream(rate, channels) {
                 // Dropped, or the finished track would then report it ended.
                 self.track = None;
@@ -309,7 +340,33 @@ impl Engine {
             self.track = Some(track);
             self.became_audible();
         }
-        self.push(&mut lead);
+        // Behind the hold and through `spill`, as Automix's whole intro
+        // pushed at once would grow the device queue for good.
+        self.mix_fade(&mut lead);
+        self.held.extend(lead.iter());
+        self.spill();
+    }
+
+    /// Trims the held tail's trailing silence and gives the fade in samples: a
+    /// crossfade's own, or the one Automix plans, with its bass trade.
+    fn plan_fade(
+        &mut self,
+        fade: usize,
+        intro: Option<&Analysis>,
+        rate: u32,
+        channels: usize,
+    ) -> (usize, Option<Trade>) {
+        if fade == 0 && intro.is_none() {
+            return (0, None);
+        }
+        let trim = samples_in(SILENCE_TRIM_SECS, rate, channels);
+        trim_silence(&mut self.held, channels, trim);
+        let Some(intro) = intro else {
+            return (fade, None);
+        };
+        let tail = automix::analyse(self.held.make_contiguous(), rate, channels);
+        let mix = automix::plan(&tail, intro, rate);
+        (mix.frames * channels, Some(Trade::new(mix, rate)))
     }
 
     /// Undoes a switch the listener has not heard yet: the queued track's
@@ -334,12 +391,24 @@ impl Engine {
         {
             switched.download.cancel();
         }
+        // The previous track's samples before the switch are queued, then
+        // held; its tail goes back after them.
         if let Some(at) = output.switch_at.take() {
             let frames = at.saturating_sub(output.frames_played) as usize;
             let keep = frames * output.channels;
+            self.held
+                .truncate(keep.saturating_sub(output.samples.len()));
             output.samples.truncate(keep);
         }
-        self.held = self.fade.take().map(|f| f.tail.into()).unwrap_or_default();
+        // Unlocked, as the tail is megabytes to copy.
+        drop(output);
+        if let Some(fade) = self.fade.take() {
+            if self.held.is_empty() {
+                self.held = fade.tail.into();
+            } else {
+                self.held.extend(fade.tail);
+            }
+        }
         true
     }
 
@@ -361,13 +430,7 @@ impl Engine {
     /// Passes decoded samples on to the device, mixed under the tail of the
     /// track fading out, and held back while the queued track may fade in.
     pub(super) fn push(&mut self, samples: &mut [f32]) {
-        if let Some(fade) = &mut self.fade {
-            fade.mix(samples);
-            // Kept until heard, as undoing the switch restores the tail.
-            if fade.done() && self.previous.is_none() {
-                self.fade = None;
-            }
-        }
+        self.mix_fade(samples);
         if self.held.is_empty() && self.hold() == 0 {
             let mut output = self.shared.output.lock().unwrap();
             output.samples.extend(samples.iter());
@@ -377,22 +440,42 @@ impl Engine {
         }
     }
 
-    /// Moves held samples on to the device beyond what the crossfade needs,
-    /// and whatever the device needs to stay above its low water mark.
-    pub(super) fn spill(&mut self) {
-        if self.held.is_empty() {
-            return;
+    fn mix_fade(&mut self, samples: &mut [f32]) {
+        if let Some(fade) = &mut self.fade {
+            fade.mix(samples);
+            // Kept until heard, as undoing the switch restores the tail.
+            if fade.done() && self.previous.is_none() {
+                self.fade = None;
+            }
         }
-        let mut output = self.shared.output.lock().unwrap();
-        let (rate, channels) = (output.rate, output.channels);
-        let n = to_spill(
-            self.held.len(),
-            self.hold(),
-            output.samples.len(),
-            samples_in(LOW_WATER_SECS, rate, channels),
-            samples_in(BUFFER_AHEAD_SECS, rate, channels),
-        );
-        output.samples.extend(self.held.drain(..n));
+    }
+
+    /// Moves held samples on to the device beyond what the hold needs, and
+    /// whatever the device needs to stay above its low water mark.
+    pub(super) fn spill(&mut self) {
+        if !self.held.is_empty() {
+            // Decoded to its end, the track can't fill the hold, so the device
+            // draws on it: a shorter blend rather than a gap.
+            let hold = match &self.track {
+                Some(t) if t.finished => self.hold().min(self.held.len()),
+                _ => self.hold(),
+            };
+            let mut output = self.shared.output.lock().unwrap();
+            let (rate, channels) = (output.rate, output.channels);
+            let n = to_spill(
+                self.held.len(),
+                hold,
+                output.samples.len(),
+                samples_in(LOW_WATER_SECS, rate, channels),
+                samples_in(BUFFER_AHEAD_SECS, rate, channels),
+            );
+            output.samples.extend(self.held.drain(..n));
+        }
+        // Freed however it emptied (a seek clears it), as a hold is megabytes,
+        // and unlocked, so the device never waits on the free.
+        if self.held.is_empty() && self.hold() == 0 {
+            self.held = VecDeque::new();
+        }
     }
 
     /// The current track's download becomes the audible one, for progress.
@@ -413,7 +496,243 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+        time::Duration,
+    };
+
     use super::*;
+    use crate::audio::{Shared, output::fill};
+
+    /// Seeded mono 8 kHz noise `secs` long, written as a WAV, and the samples
+    /// it decodes to.
+    fn track(name: &str, mut seed: u32, secs: f64) -> (PathBuf, Vec<f32>) {
+        let samples: Vec<f32> = (0..(secs * 8_000.0) as usize)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+            })
+            .collect();
+        let path = std::env::temp_dir().join(format!("lily-{name}-{}.wav", std::process::id()));
+        crate::local::tests::write_wav(&path, &samples);
+        let mut decoder = Decoder::open(Download::open(path.clone()).reader(), "").unwrap();
+        let mut decoded = Vec::new();
+        while let Ok(Decoded::Samples) = decoder.decode_next(&mut decoded) {}
+        (path, decoded)
+    }
+
+    /// The engine driven as its thread drives it, with the device drained
+    /// 10 ms at a time by its own callback, and everything it heard.
+    struct Run {
+        engine: Engine,
+        shared: Arc<Shared>,
+        events: Arc<Mutex<Vec<String>>>,
+        heard: Vec<f32>,
+    }
+
+    impl Run {
+        fn new(first: &Path) -> Self {
+            let shared = Arc::new(Shared::default());
+            {
+                let mut output = shared.output.lock().unwrap();
+                (output.rate, output.channels, output.gain) = (8_000, 1, 1.0);
+            }
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let log = Arc::clone(&events);
+            let on_event = move |e: PlayerEvent| log.lock().unwrap().push(format!("{e:?}"));
+            let (_, rx) = mpsc::channel();
+            let mut engine = Engine::new(rx, Arc::clone(&shared), Box::new(on_event));
+            let download = Download::open(first.to_owned());
+            *shared.download.lock().unwrap() = Some(Arc::clone(&download));
+            engine.track = Some(Track {
+                decoder: Decoder::open(download.reader(), "").unwrap(),
+                download,
+                finished: false,
+                started: false,
+            });
+            Self {
+                engine,
+                shared,
+                events,
+                heard: Vec::new(),
+            }
+        }
+
+        fn queue(&mut self, next: &Path, transition: Transition, loudness_db: Option<f32>) {
+            self.start_opening(next, transition, loudness_db);
+            self.open();
+        }
+
+        fn start_opening(&mut self, next: &Path, transition: Transition, loudness_db: Option<f32>) {
+            let opening = Opening {
+                mime: String::new(),
+                loudness_db,
+                start_at: 0.0,
+            };
+            self.engine
+                .queue(opening, Download::open(next.to_owned()), transition);
+        }
+
+        /// Waits for the queued track to open.
+        fn open(&mut self) {
+            while self.engine.next.as_ref().is_some_and(|n| n.ready.is_none()) {
+                self.engine.poll_next();
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        /// Plays until `stop` holds or nothing is left to play.
+        fn play(&mut self, stop: impl Fn(&Engine, usize) -> bool) {
+            for _ in 0..1_000_000 {
+                if stop(&self.engine, self.heard.len()) {
+                    return;
+                }
+                self.engine.check_advanced();
+                self.engine.try_switch();
+                self.engine.spill();
+                if self.engine.wants_samples() {
+                    self.engine.decode_some();
+                    continue;
+                }
+                self.engine.check_finished();
+                let queued = self.shared.output.lock().unwrap().samples.len();
+                // A packet over what the engine buffers ahead, never a hold.
+                assert!(
+                    queued <= samples_in(BUFFER_AHEAD_SECS + 0.5, 8_000, 1),
+                    "device queue grew to {queued}"
+                );
+                let n = queued.min(80);
+                if n < 80 {
+                    let done = self.engine.track.as_ref().is_none_or(|t| t.finished);
+                    assert!(done && self.engine.held.is_empty(), "starved");
+                }
+                if n == 0 && self.engine.track.is_none() {
+                    return;
+                }
+                let mut data = [0.0; 80];
+                fill(&self.shared, &mut data, 8_000);
+                self.heard.extend(&data[..n]);
+            }
+            panic!("never finished");
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    /// Plays `first` into a `second` 6 dB louder by `transition`, checking
+    /// that what is heard is `first` up to the fade, the fade of `fade`
+    /// frames, then the rest of `second` turned down, so a switch the device
+    /// reached early or late would show.
+    fn plays_through(name: &str, transition: Transition, second_secs: f64, fade: usize) {
+        let (a, first) = track(&format!("{name}-a"), 1, 30.0);
+        let (b, second) = track(&format!("{name}-b"), 2, second_secs);
+        let mut run = Run::new(&a);
+        run.queue(&b, transition, Some(6.0));
+        run.play(|_, _| false);
+        let _ = (std::fs::remove_file(a), std::fs::remove_file(b));
+        let start = first.len() - fade;
+        assert_eq!(run.heard.len(), start + second.len());
+        assert!(
+            run.heard[..start] == first[..start],
+            "the first track, whole up to the fade"
+        );
+        let gain = run
+            .shared
+            .correction(crate::audio::loudness_gain(Some(6.0)));
+        let rest = run.heard[first.len()..].iter().zip(&second[fade..]);
+        assert!(
+            rest.into_iter()
+                .all(|(heard, s)| (heard - s * gain).abs() < 1e-6),
+            "then the second, whole at its loudness"
+        );
+        assert_eq!(run.events(), ["Started", "Advanced", "Ended"]);
+    }
+
+    #[test]
+    fn runs_gapless_straight_on() {
+        plays_through("gapless", Transition::Gapless, 15.0, 0);
+    }
+
+    #[test]
+    fn crossfades_over_the_length_set() {
+        plays_through("crossfade", Transition::Crossfade(1.0), 15.0, 8_000);
+    }
+
+    #[test]
+    fn automixes_hard_ends_over_the_shortest_blend() {
+        plays_through("automix", Transition::Automix, 15.0, 3 * 8_000);
+    }
+
+    #[test]
+    fn automixes_into_a_track_shorter_than_its_intro() {
+        // Over half the track, under the shortest blend, decoded whole ahead.
+        plays_through("automix-short", Transition::Automix, 4.0, 2 * 8_000);
+    }
+
+    #[test]
+    fn plays_the_hold_on_while_the_next_track_opens() {
+        // Decoded to its end, under the hold, with the next yet to open.
+        let (a, first) = track("opening-a", 5, 10.0);
+        let (b, _) = track("opening-b", 6, 15.0);
+        let mut run = Run::new(&a);
+        run.start_opening(&b, Transition::Automix, None);
+        run.play(|_, heard| heard >= 4 * 8_000);
+        assert!(
+            run.heard[..] == first[..run.heard.len()],
+            "the first track, without a gap"
+        );
+        run.open();
+        run.play(|_, _| false);
+        let _ = (std::fs::remove_file(a), std::fs::remove_file(b));
+        assert_eq!(run.events(), ["Started", "Advanced", "Ended"]);
+    }
+
+    /// Undoes a switch a second on, as a seek would land, or once the device
+    /// queue reaches into the blend (`late`), and checks only the first track
+    /// is heard.
+    fn undoes(name: &str, transition: Transition, late: bool) {
+        let (a, first) = track(&format!("{name}-a"), 3, 30.0);
+        let (b, _) = track(&format!("{name}-b"), 4, 15.0);
+        let mut run = Run::new(&a);
+        run.queue(&b, transition, None);
+        run.play(|engine, _| engine.previous.is_some());
+        let switched = run.heard.len();
+        run.play(|engine, heard| {
+            if !late {
+                return heard >= switched + 8_000;
+            }
+            // Mono, so samples are frames.
+            let o = engine.shared.output.lock().unwrap();
+            o.switch_at
+                .is_some_and(|at| o.frames_played + o.samples.len() as u64 > at + 800)
+        });
+        assert!(run.engine.undo_switch(), "{name}: undone");
+        run.play(|_, _| false);
+        let _ = (std::fs::remove_file(a), std::fs::remove_file(b));
+        assert!(
+            run.heard == first,
+            "{name}: the first track whole, nothing of the second"
+        );
+        assert_eq!(run.events(), ["Started", "Ended"], "{name}");
+    }
+
+    #[test]
+    fn undoing_a_crossfade_plays_the_first_track_out() {
+        undoes("undo-crossfade", Transition::Crossfade(1.0), false);
+    }
+
+    #[test]
+    fn undoing_an_automix_switch_plays_the_first_track_out() {
+        undoes("undo-automix", Transition::Automix, false);
+    }
+
+    #[test]
+    fn undoing_a_switch_already_queued_drops_the_blend() {
+        undoes("undo-late", Transition::Automix, true);
+    }
 
     fn fade(tail: Vec<f32>, old_gain: f32) -> Fade {
         Fade {
@@ -421,6 +740,7 @@ mod tests {
             channels: 2,
             mixed: 0,
             old_gain,
+            trade: None,
         }
     }
 
@@ -462,6 +782,30 @@ mod tests {
     }
 
     #[test]
+    fn trades_bass_across_packets_as_in_one() {
+        let tail: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.01).sin()).collect();
+        let new: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.03).cos()).collect();
+        let plan = || {
+            let analyse = |s: &[f32]| automix::analyse(s, 48_000, 2);
+            let mix = automix::plan(&analyse(&tail), &analyse(&new), 48_000);
+            Fade {
+                trade: Some(Trade::new(mix, 48_000)),
+                ..fade(tail.clone(), 0.5)
+            }
+        };
+        let mut whole = new.clone();
+        plan().mix(&mut whole);
+        let mut split = plan();
+        let mut parts = new.clone();
+        for part in parts.chunks_mut(122) {
+            split.mix(part);
+        }
+        assert!(split.done());
+        assert_eq!(parts, whole);
+        assert_ne!(parts, new, "mixed");
+    }
+
+    #[test]
     fn leaves_samples_past_the_fade_alone() {
         let mut fade = fade(vec![0.5; 4], 2.0);
         let mut samples = vec![0.25; 10];
@@ -472,46 +816,21 @@ mod tests {
     }
 
     #[test]
-    fn splits_the_tail_before_trailing_silence() {
+    fn trims_trailing_silence() {
         let mut held: VecDeque<f32> = [0.25; 4]
             .into_iter()
             .chain([0.5; 4])
             .chain([0.0; 6])
             .collect();
-        let mut out = VecDeque::new();
-        let tail = take_tail(&mut held, &mut out, 2, 4, 20);
-        assert_eq!(tail, [0.5; 4]);
-        assert_eq!(out, [0.25; 4], "the rest plays before the fade");
-        assert!(held.is_empty());
+        trim_silence(&mut held, 2, 20);
+        assert_eq!(held, [0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5]);
     }
 
     #[test]
     fn cuts_no_more_silence_than_allowed() {
         let mut held: VecDeque<f32> = [0.5; 4].into_iter().chain([0.0; 8]).collect();
-        let mut out = VecDeque::new();
-        let tail = take_tail(&mut held, &mut out, 2, 4, 2);
-        assert_eq!(tail, [0.0; 4], "a long silence is the music's, not the end");
-        assert_eq!(out.len(), 6);
-    }
-
-    #[test]
-    fn gapless_takes_no_tail() {
-        let mut held: VecDeque<f32> = [0.5, 0.5, 0.0, 0.0].into_iter().collect();
-        let mut out = VecDeque::new();
-        assert!(take_tail(&mut held, &mut out, 2, 0, 20).is_empty());
-        assert_eq!(
-            out,
-            [0.5, 0.5, 0.0, 0.0],
-            "gapless keeps the silence, exactly"
-        );
-    }
-
-    #[test]
-    fn a_fade_longer_than_the_track_takes_all_of_it() {
-        let mut held: VecDeque<f32> = [0.5; 6].into_iter().collect();
-        let mut out = VecDeque::new();
-        assert_eq!(take_tail(&mut held, &mut out, 2, 200, 20).len(), 6);
-        assert!(out.is_empty());
+        trim_silence(&mut held, 2, 2);
+        assert_eq!(held.len(), 10, "a long silence is the music's, not the end");
     }
 
     #[test]

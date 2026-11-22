@@ -248,10 +248,13 @@ fn tracks<'a>(songs: impl Iterator<Item = &'a Song>) -> Vec<Track> {
 pub(crate) mod tests {
     use super::*;
 
-    /// A silent mono 16-bit WAV at 8 kHz, untagged.
-    pub(crate) fn write_wav(path: &Path, secs: u32) {
+    /// A mono 16-bit WAV at 8 kHz of `samples`.
+    pub(crate) fn write_wav(path: &Path, samples: &[f32]) {
         const RATE: u32 = 8000;
-        let data = vec![0; (RATE * secs * 2) as usize];
+        let data: Vec<u8> = samples
+            .iter()
+            .flat_map(|s| ((s * 32_767.0) as i16).to_le_bytes())
+            .collect();
         let mut wav = b"RIFF".to_vec();
         wav.extend((36 + data.len() as u32).to_le_bytes());
         wav.extend(b"WAVEfmt ");
@@ -273,7 +276,7 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("lily-untagged-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Some Song.wav");
-        write_wav(&path, 2);
+        write_wav(&path, &[0.0; 16_000]);
         let (tracks, _) = Library::default().scan(std::slice::from_ref(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
         let [track] = tracks.as_slice() else {

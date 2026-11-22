@@ -38,6 +38,7 @@ impl App {
                 .position(|&s| s == settings.crossfade_secs)
                 .map_or(-1, |i| i as i32),
         );
+        ui.set_automix(settings.automix);
         ui.set_pause_on_unplug(settings.pause_on_unplug);
         ui.set_speed(
             SPEEDS

@@ -1,8 +1,11 @@
 //! The engine thread: decodes the current track into the sample queue, and
-//! moves on to the queued one without a gap or with a crossfade.
+//! moves on to the queued one without a gap, with a crossfade or by Automix.
 
+mod automix;
 mod device;
 mod gapless;
+
+pub(super) use automix::TAIL_SECS as AUTOMIX_TAIL_SECS;
 
 use std::{
     collections::VecDeque,
@@ -124,8 +127,8 @@ impl Engine {
             self.reopen_lost_device();
             match command {
                 Some(Command::Load(opening, download)) => self.load(opening, download),
-                Some(Command::Queue(opening, download, crossfade_secs)) => {
-                    self.queue(opening, download, crossfade_secs)
+                Some(Command::Queue(opening, download, transition)) => {
+                    self.queue(opening, download, transition)
                 }
                 Some(Command::ClearNext) => self.drop_next(),
                 Some(Command::Seek(secs)) => self.seek(secs),

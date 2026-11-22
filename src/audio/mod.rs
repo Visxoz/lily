@@ -29,9 +29,31 @@ pub use source::{Refresh, Source};
 pub const MIN_SPEED: f32 = 0.5;
 pub const MAX_SPEED: f32 = 2.0;
 
-/// The most silence cut from either side of a crossfade, so a quiet
+/// The most silence cut from either side of a blend, so a quiet
 /// passage or a hidden track is not mistaken for the end.
-pub const SILENCE_TRIM_SECS: f64 = 4.0;
+const SILENCE_TRIM_SECS: f64 = 4.0;
+
+/// How the queued track follows the current one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transition {
+    Gapless,
+    /// A fade of this many seconds.
+    Crossfade(f64),
+    /// A blend planned from both tracks' sound (`engine::automix`).
+    Automix,
+}
+
+impl Transition {
+    /// The current track's end held back from the device for the move, in
+    /// song time, so the next track must be queued at least this early.
+    pub fn hold_secs(self) -> f64 {
+        match self {
+            Self::Gapless => 0.0,
+            Self::Crossfade(secs) => secs + SILENCE_TRIM_SECS,
+            Self::Automix => engine::AUTOMIX_TAIL_SECS + SILENCE_TRIM_SECS,
+        }
+    }
+}
 
 /// A stream to play: where its bytes come from and what the engine opens
 /// them with.
@@ -102,7 +124,7 @@ pub enum PlayerEvent {
 
 enum Command {
     Load(Opening, Arc<Download>),
-    Queue(Opening, Arc<Download>, f64),
+    Queue(Opening, Arc<Download>, Transition),
     ClearNext,
     Seek(f64),
     Stop,
@@ -192,6 +214,28 @@ struct Shared {
     speed: AtomicU32,
 }
 
+impl Default for Shared {
+    fn default() -> Self {
+        Self {
+            output: Mutex::new(Output {
+                channels: 2,
+                next_loudness: 1.0,
+                ..Default::default()
+            }),
+            paused: AtomicBool::new(false),
+            device_lost: AtomicBool::new(false),
+            pause_on_unplug: AtomicBool::new(true),
+            volume: AtomicU32::new(1f32.to_bits()),
+            normalise: AtomicU8::new(Normalise::Normal as u8),
+            loudness_gain: AtomicU32::new(1f32.to_bits()),
+            download: Mutex::new(None),
+            next_download: Mutex::new(None),
+            device: Mutex::new(None),
+            speed: AtomicU32::new(1f32.to_bits()),
+        }
+    }
+}
+
 impl Shared {
     fn set_loudness(&self, gain: f32) {
         self.loudness_gain.store(gain.to_bits(), Ordering::Relaxed);
@@ -228,23 +272,7 @@ pub struct Player {
 
 impl Player {
     pub fn spawn(on_event: impl Fn(PlayerEvent) + Send + 'static) -> Self {
-        let shared = Arc::new(Shared {
-            output: Mutex::new(Output {
-                channels: 2,
-                next_loudness: 1.0,
-                ..Default::default()
-            }),
-            paused: AtomicBool::new(false),
-            device_lost: AtomicBool::new(false),
-            pause_on_unplug: AtomicBool::new(true),
-            volume: AtomicU32::new(1f32.to_bits()),
-            normalise: AtomicU8::new(Normalise::Normal as u8),
-            loudness_gain: AtomicU32::new(1f32.to_bits()),
-            download: Mutex::new(None),
-            next_download: Mutex::new(None),
-            device: Mutex::new(None),
-            speed: AtomicU32::new(1f32.to_bits()),
-        });
+        let shared = Arc::new(Shared::default());
         let (tx, rx) = mpsc::channel();
         let engine_shared = Arc::clone(&shared);
         thread::Builder::new()
@@ -273,16 +301,13 @@ impl Player {
         let _ = self.tx.send(Command::Load(opening, download));
     }
 
-    /// Queues the track to follow the current one without a gap, or fading
-    /// into it over `crossfade_secs`, replacing any queued before. Its
-    /// download starts now.
-    pub fn queue_next(&self, spec: StreamSpec, crossfade_secs: f64) {
+    /// Queues the track to follow the current one by `transition`, replacing
+    /// any queued before. Its download starts now.
+    pub fn queue_next(&self, spec: StreamSpec, transition: Transition) {
         self.shared.cancel_next();
         let (download, opening) = self.start(spec);
         *self.shared.next_download.lock().unwrap() = Some(Arc::clone(&download));
-        let _ = self
-            .tx
-            .send(Command::Queue(opening, download, crossfade_secs));
+        let _ = self.tx.send(Command::Queue(opening, download, transition));
     }
 
     /// Starts the spec's download, or takes the current one should it hold
@@ -416,7 +441,7 @@ mod tests {
     #[test]
     fn plays_a_file_from_disk() {
         let path = std::env::temp_dir().join(format!("lily-play-{}.wav", std::process::id()));
-        crate::local::tests::write_wav(&path, 1);
+        crate::local::tests::write_wav(&path, &[0.0; 8_000]);
         let download = Download::open(path.clone());
         let mut decoder = Decoder::open(download.reader(), "").unwrap();
         let mut samples = Vec::new();
