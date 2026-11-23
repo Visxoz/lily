@@ -102,7 +102,7 @@ Media keys and the Windows media overlay, Discord and Last.fm, the output device
 
 <img src="docs/fullscreen.png" width="100%" alt="The full-screen player: the artwork, its title and the next song beside large synced lyrics, over the artwork's colours">
 
-The full-screen button in the player bar puts the artwork and its lyrics over the artwork's own colours, with the queue a click away in a drawer. <kbd>Esc</kbd> leaves.
+The full-screen button in the player bar puts the artwork and its lyrics over the artwork's own colours, with the queue a click away in a drawer. Turn on Animated artwork in Settings and, where there is one, the artwork moves: the album's Apple Music motion cover, or the song's Spotify Canvas once you sign in to Spotify there too. <kbd>Esc</kbd> leaves.
 
 ## Smart Shuffle and the queue
 
