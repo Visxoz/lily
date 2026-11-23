@@ -3,7 +3,7 @@ import { Api, QueueItem } from "../types.slint";
 import { Icon, IconButton, PillGroup } from "../widgets/buttons.slint";
 import { ListView } from "../widgets/list.slint";
 import { LyricsPlaceholder } from "../widgets/skeleton.slint";
-import { Lyrics } from "lyrics.slint";
+import { LyricLine, Lyrics } from "lyrics.slint";
 import { Drag, PanelAction, QueueRow } from "queue.slint";
 
 /// The queue and lyrics panel; over the full player, whose lyrics are always
@@ -15,7 +15,7 @@ export component SidePanel inherits Rectangle {
     in property <color> np-accent;
     in property <[QueueItem]> queue;
     in property <int> queue-selected;
-    in property <[string]> lyrics;
+    in property <[LyricLine]> lyrics;
     in property <bool> lyrics-synced;
     in property <int> lyrics-current;
     in property <string> lyrics-source;

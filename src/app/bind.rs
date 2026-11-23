@@ -87,7 +87,14 @@ impl App {
             }
         });
         on!(on_lyric_clicked, |app, index| {
-            let start = app.state.borrow().lyric_starts.get(index as usize).copied();
+            let start = app
+                .state
+                .borrow()
+                .lyrics
+                .shown
+                .starts
+                .get(index as usize)
+                .copied();
             if let Some(start) = start {
                 app.seek_to(start);
             }

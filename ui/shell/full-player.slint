@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { Lyrics } from "../panel/lyrics.slint";
+import { LyricLine, Lyrics } from "../panel/lyrics.slint";
 import { Art } from "../widgets/art.slint";
 import { LyricsPlaceholder } from "../widgets/skeleton.slint";
 
@@ -11,7 +11,7 @@ export component FullPlayer inherits Rectangle {
     in property <string> title;
     in property <string> artists;
     in property <string> next;
-    in property <[string]> lyrics;
+    in property <[LyricLine]> lyrics;
     in property <bool> lyrics-synced;
     in property <int> lyrics-current;
     in property <string> lyrics-source;

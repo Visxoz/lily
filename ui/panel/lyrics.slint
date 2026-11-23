@@ -1,9 +1,32 @@
 import { Theme } from "../theme.slint";
+import { Api } from "../types.slint";
+
+/// A word or syllable as sung, its text keeping any space after it.
+export struct LyricWord {
+    text: string,
+    start: float,
+    end: float,
+}
+
+/// A line, with its words when sung word by word.
+export struct LyricLine {
+    text: string,
+    words: [LyricWord],
+}
+
+/// The song's time for the line sung word by word: `at` seconds when set,
+/// moving on at `rate` until `until`, its last word's end.
+export global LyricsClock {
+    in property <float> at;
+    in property <float> rate;
+    in property <float> until;
+}
 
 /// The lyrics, line by line. Synced lyrics light up the line being sung,
-/// glide it to the middle, and seek to a line when it is clicked.
+/// glide it to the middle, and seek to a line when it is clicked; lyrics
+/// timed by the word fill in as sung.
 export component Lyrics inherits Flickable {
-    in property <[string]> lines;
+    in property <[LyricLine]> lines;
     in property <bool> synced;
     in property <int> current: -1;
     in property <string> source;
@@ -26,12 +49,37 @@ export component Lyrics inherits Flickable {
         }
     }
 
+    // Read off the frame clock only while words are filling, so the window
+    // redraws every frame only then.
+    property <float> clock-at: LyricsClock.at;
+    property <float> clock-rate: LyricsClock.rate;
+    property <duration> clock-set;
+    // `changed` misses the values the panel opens with.
+    init => {
+        root.clock-set = animation-tick();
+    }
+    changed clock-at => {
+        root.clock-set = animation-tick();
+    }
+    changed clock-rate => {
+        root.clock-set = animation-tick();
+    }
+    property <float> time: root.clock-rate > 0 && root.clock-at < LyricsClock.until && !Api.minimised
+        ? min(LyricsClock.until, root.clock-at + (animation-tick() - root.clock-set) / 1s * root.clock-rate)
+        : root.clock-at;
+
     property <length> line-y;
     property <length> line-height;
 
     /// The scroll offset that puts the current line in the middle.
     pure function centred() -> length {
         clamp(root.height / 2 - root.line-y - root.line-height / 2, min(0px, root.height - root.content-height), 0px)
+    }
+
+    function centre-on(y: length, height: length) {
+        root.line-y = y;
+        root.line-height = height;
+        root.content-y = root.centred();
     }
 
     // A line made current as the rows are created sees only the rows before
@@ -42,6 +90,15 @@ export component Lyrics inherits Flickable {
         }
     }
 
+    // Another song's lyrics can replace these in place; a current line's row
+    // centres itself as it is made, otherwise they start at the top.
+    changed lines => {
+        root.gliding = false;
+        if root.current < 0 {
+            root.content-y = 0;
+        }
+    }
+
     content-height: column.preferred-height;
 
     column := VerticalLayout {
@@ -49,8 +106,15 @@ export component Lyrics inherits Flickable {
         padding: 24px;
         padding-top: 16px;
         spacing: 12px;
-        for line[i] in root.lines: Text {
+        // Dimmed in its texts rather than as a whole, as `opacity` on an item
+        // with several children draws it through a layer of its own.
+        for line[i] in root.lines: TouchArea {
             property <bool> is-current: i == root.current;
+            property <float> alpha: !root.synced || self.is-current ? 1 : self.has-hover ? 0.8 : root.rest-opacity;
+            enabled: root.synced;
+            mouse-cursor: self.enabled ? pointer : default;
+            clicked => { root.line-clicked(i); }
+
             changed is-current => {
                 if self.is-current {
                     root.line-y = self.y;
@@ -61,27 +125,52 @@ export component Lyrics inherits Flickable {
                     root.gliding = true;
                 }
             }
-            // Lyrics opened mid-song start at the line being sung.
+            // Opened mid-song, start at the line being sung, and stay on it
+            // as the word-wrapped rows above settle their heights.
             init => {
                 if self.is-current {
-                    root.line-y = self.y;
-                    root.line-height = self.height;
-                    root.content-y = root.centred();
+                    root.centre-on(self.y, self.height);
                 }
             }
-            text: line;
-            wrap: word-wrap;
-            font-size: root.line-size;
-            font-weight: 700;
-            font-family: Theme.display-font;
-            color: Theme.text;
-            opacity: !root.synced || self.is-current ? 1 : touch.has-hover ? 0.8 : root.rest-opacity;
-            animate opacity { duration: Theme.normal; }
+            changed y => {
+                if self.is-current && !root.gliding {
+                    root.centre-on(self.y, self.height);
+                }
+            }
+            changed height => {
+                if self.is-current && !root.gliding {
+                    root.centre-on(self.y, self.height);
+                }
+            }
 
-            touch := TouchArea {
-                enabled: root.synced;
-                mouse-cursor: self.enabled ? pointer : default;
-                clicked => { root.line-clicked(i); }
+            VerticalLayout {
+                if line.words.length == 0: Text {
+                    text: line.text;
+                    wrap: word-wrap;
+                    font-size: root.line-size;
+                    font-weight: 700;
+                    font-family: Theme.display-font;
+                    color: Theme.text;
+                    opacity: alpha;
+                    animate opacity { duration: Theme.normal; }
+                }
+                // Word-timed lines always wrap as words, so a line keeps its
+                // height as it starts and ends.
+                if line.words.length > 0: FlexboxLayout {
+                    for word in line.words: Text {
+                        // How much has been sung, 0 to 1.
+                        property <float> sung: is-current ? clamp((root.time - word.start) / max(word.end - word.start, 0.001), 0, 1) : 0;
+                        property <color> dim: Theme.text.with-alpha(is-current ? root.rest-opacity : alpha);
+                        text: word.text;
+                        font-size: root.line-size;
+                        font-weight: 700;
+                        font-family: Theme.display-font;
+                        // A hard stop where the singing has got to.
+                        color: self.sung <= 0 ? self.dim
+                            : self.sung >= 1 ? Theme.text
+                            : @linear-gradient(90deg, Theme.text 0%, Theme.text self.sung * 100%, self.dim self.sung * 100%, self.dim 100%);
+                    }
+                }
             }
         }
         if root.source != "": Text {

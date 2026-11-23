@@ -165,6 +165,22 @@ fn open_in_browser(url: &str) {
     }
 }
 
+/// In private mode a page's cookies stay in memory; the folder only keeps
+/// WebView2's own files out of the exe's directory.
+pub fn web_context() -> WebContext {
+    WebContext::new(Some(crate::settings::data_dir().join("webview")))
+}
+
+/// Every WebView2 in the app: private, without downloads, and with the same
+/// arguments, as WebView2 opens the shared folder only with those it began with.
+pub fn web_view<'a>(context: &'a mut WebContext, url: &str) -> WebViewBuilder<'a> {
+    WebViewBuilder::new_with_web_context(context)
+        .with_url(url)
+        .with_incognito(true)
+        .with_additional_browser_args(browser_args())
+        .with_download_started_handler(|_, _| false)
+}
+
 pub struct SignIn {
     site: &'static Site,
     window: SignInWindow,
@@ -178,14 +194,11 @@ impl SignIn {
         let window = SignInWindow::new().map_err(|e| e.to_string())?;
         window.set_site(site.name.into());
         window.show().map_err(|e| e.to_string())?;
-        // In private mode the page's cookies stay in memory; the folder only
-        // keeps WebView2's own files out of the exe's directory.
-        let context = WebContext::new(Some(crate::settings::data_dir().join("webview")));
         Ok(Self {
             site,
             window,
             webview: None,
-            context,
+            context: web_context(),
         })
     }
 
@@ -197,10 +210,7 @@ impl SignIn {
             return Ok(false);
         }
         let allows = self.site.allows;
-        let webview = WebViewBuilder::new_with_web_context(&mut self.context)
-            .with_url(self.site.start)
-            .with_incognito(true)
-            .with_additional_browser_args(browser_args())
+        let webview = web_view(&mut self.context, self.site.start)
             .with_bounds(bounds(&self.window))
             .with_on_page_load_handler(move |event, _| {
                 if matches!(event, PageLoadEvent::Finished) {
@@ -212,7 +222,6 @@ impl SignIn {
                 open_in_browser(&url);
                 NewWindowResponse::Deny
             })
-            .with_download_started_handler(|_, _| false)
             .build_as_child(&handle)
             .map_err(|e| format!("could not open {}'s sign-in page: {e}", self.site.name))?;
         self.webview = Some(webview);

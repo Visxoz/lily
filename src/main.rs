@@ -11,6 +11,7 @@ mod images;
 mod lastfm;
 mod local;
 mod logger;
+mod lyrics_pass;
 mod motion;
 mod platform;
 mod presence;

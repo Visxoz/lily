@@ -303,6 +303,39 @@ pub fn motion_client() -> &'static reqwest::Client {
     })
 }
 
+/// Lyrics sites besides YouTube. Exact hosts, as nothing else on those
+/// domains is needed.
+const LYRICS_HOSTS: &[&str] = &[
+    crate::api::lyrics::hub::HOST,
+    "lrc.red",
+    "lrclib.net",
+    "mobileservice.kugou.com",
+    "krcs.kugou.com",
+];
+
+fn lyrics_allowed(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| LYRICS_HOSTS.contains(&host))
+}
+
+/// For lyrics sites: a read timeout rather than a whole one, as the hub's
+/// answer streams in site by site, and a short one, as lyrics wait on them.
+pub fn lyrics_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        proxied(keep_alive(reqwest::Client::builder()))
+            // LRCLIB asks clients to name themselves.
+            .user_agent(concat!("Lily/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(4))
+            .read_timeout(Duration::from_secs(4))
+            .redirect(redirects_if(lyrics_allowed))
+            .build()
+            .expect("HTTP client builds")
+    })
+}
+
 /// For the audio download thread. No compression, as byte ranges must be the
 /// bytes on the wire; the long idle pool keeps the warm-up's connection.
 pub fn blocking_client() -> &'static reqwest::blocking::Client {
@@ -340,6 +373,16 @@ mod tests {
         assert!(allowed(
             "https://www.gstatic.com/youtube/media/ytm/images/pbg/liked-music-@576.png"
         ));
+    }
+
+    #[test]
+    fn lyrics_keep_to_their_sites() {
+        let allowed = |url: &str| lyrics_allowed(&Url::parse(url).unwrap());
+        assert!(allowed("https://lrclib.net/api/get"));
+        assert!(allowed("https://lyrics.api.dacubeking.com/v2/lyrics"));
+        assert!(!allowed("http://lrclib.net/"), "plain HTTP");
+        assert!(!allowed("https://kugou.com/"));
+        assert!(!allowed("https://lrc.red.evil.com/"));
     }
 
     #[test]

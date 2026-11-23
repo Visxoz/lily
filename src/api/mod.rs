@@ -4,7 +4,7 @@ mod format;
 mod history;
 mod home_feed;
 mod library;
-mod lyrics;
+pub mod lyrics;
 mod model;
 mod pages;
 
@@ -211,11 +211,16 @@ impl Api {
             .find(|song| is_song_version(video, song)))
     }
 
-    pub async fn lyrics(&self, video_id: &str) -> Result<Option<Lyrics>> {
-        // A local file has none on YouTube.
-        if !is_video_id(video_id) {
+    /// YouTube's lyrics, or another site's better ones that agree with them.
+    pub async fn lyrics(&self, track: &Track) -> Result<Option<Lyrics>> {
+        // A local file has none online, and its name never leaves the PC.
+        if !is_video_id(&track.id) {
             return Ok(None);
         }
+        lyrics::find(track, self.youtube_lyrics(&track.id)).await
+    }
+
+    async fn youtube_lyrics(&self, video_id: &str) -> Result<Option<Lyrics>> {
         let details = self.q().music_details(video_id).await.map_err(err)?;
         let Some(lyrics_id) = details.lyrics_id else {
             return Ok(None);

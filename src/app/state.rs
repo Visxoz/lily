@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use super::{account, playback, playback::song_version::SongVersion, session};
+use super::{account, now_playing, playback, playback::song_version::SongVersion, session};
 use crate::{
     api::{self, Card, Page, Route, Track},
     downloads::Downloads,
@@ -142,9 +142,7 @@ pub(super) struct State {
     /// never join the next.
     pub(super) queue_generation: u64,
     pub(super) playback: Playback,
-    pub(super) lyrics_for: Option<String>,
-    /// Each lyric line's start in seconds, when the lyrics shown are synced.
-    pub(super) lyric_starts: Vec<f64>,
+    pub(super) lyrics: now_playing::lyrics::Lyrics,
     pub(super) suggest_generation: u64,
     pub(super) page_cache: HashMap<Route, (Page, Instant)>,
     /// Music videos looked up for a song version, by video ID.

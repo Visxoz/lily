@@ -8,7 +8,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use slint::{ComponentHandle, Image, Model, SharedString, Timer, TimerMode};
 
-use super::{App, browse::items::card_item};
+use super::{App, browse::items::card_item, now_playing::lyrics::PassCheck};
 use crate::{
     Api as ApiGlobal, CardItem,
     api::{Card, Route},
@@ -82,6 +82,7 @@ impl App {
             return;
         }
         self.close_sign_in();
+        self.stop_lyrics_pass();
         // Each step is deferred: WebView2 calls back from inside its own
         // events, and the window must not be dropped from its own handler.
         let weak = Rc::downgrade(self);
@@ -132,11 +133,21 @@ impl App {
         self.sign_in_timer
             .start(TimerMode::Repeated, Duration::from_millis(50), move || {
                 let Some(app) = weak.upgrade() else { return };
+                // The lyrics check's WebView2 shares the folder.
+                if matches!(*app.lyrics_pass.borrow(), Some(PassCheck::Starting)) {
+                    return;
+                }
                 let Some(mut open) = app.sign_in_window.borrow_mut().take() else {
                     app.sign_in_timer.stop();
                     return;
                 };
                 let result = open.attach(on_page.clone());
+                let ui = app.ui();
+                // Closed while attaching, so it goes rather than being kept hidden.
+                if !ui.get_signing_in_browser() && !ui.get_spotify_signing_in() {
+                    app.sign_in_timer.stop();
+                    return;
+                }
                 *app.sign_in_window.borrow_mut() = Some(open);
                 attempts.set(attempts.get() + 1);
                 match result {

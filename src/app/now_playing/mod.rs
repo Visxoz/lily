@@ -1,15 +1,16 @@
 //! What shows the playing track: the player bar, the queue and lyrics
 //! panel, the media overlay and Discord.
 
+pub(super) mod lyrics;
 pub(super) mod mini;
 pub(super) mod motion;
 pub(super) mod queue_panel;
 
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
-use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, TimerMode, VecModel};
+use slint::{ComponentHandle, Image, Model};
 
-use super::{App, TICK, s};
+use super::{App, s};
 use crate::{
     Api as ApiGlobal, AppWindow, QueueItem,
     api::{self, Track},
@@ -72,9 +73,7 @@ impl App {
         if new_song {
             self.refresh_motion();
             self.load_rating(track.id.clone());
-            let mut state = self.state.borrow_mut();
-            state.lyrics_for = None;
-            state.lyric_starts.clear();
+            self.leave_lyrics();
         }
         if ui.get_lyrics_shown() {
             self.load_lyrics();
@@ -355,97 +354,6 @@ impl App {
                 }
             },
         );
-    }
-
-    pub(super) fn load_lyrics(self: &Rc<Self>) {
-        let Some(id) = self.state.borrow().queue.current().map(|t| t.id.clone()) else {
-            self.show_lyrics(api::Lyrics::plain(
-                "Play something to see its lyrics.",
-                String::new(),
-            ));
-            return;
-        };
-        if self.state.borrow().lyrics_for.as_deref() == Some(id.as_str()) {
-            return;
-        }
-        self.state.borrow_mut().lyrics_for = Some(id.clone());
-        let ui = self.ui();
-        ui.set_lyrics_loading(true);
-        let api = self.api.clone();
-        let requested = id.clone();
-        self.spawn(
-            async move { api.lyrics(&requested).await },
-            move |app, result| {
-                if app.state.borrow().lyrics_for.as_deref() != Some(id.as_str()) {
-                    return;
-                }
-                let lyrics = match result {
-                    Ok(Some(lyrics)) => lyrics,
-                    Ok(None) => {
-                        api::Lyrics::plain("Lyrics aren't available for this song.", String::new())
-                    }
-                    Err(e) => {
-                        app.state.borrow_mut().lyrics_for = None;
-                        api::Lyrics::plain(&format!("Couldn't load lyrics: {e}"), String::new())
-                    }
-                };
-                app.show_lyrics(lyrics);
-                app.ui().set_lyrics_loading(false);
-            },
-        );
-    }
-
-    fn show_lyrics(self: &Rc<Self>, lyrics: api::Lyrics) {
-        let ui = self.ui();
-        let lines: Vec<SharedString> = lyrics.lines.into_iter().map(Into::into).collect();
-        ui.set_lyrics(ModelRc::new(VecModel::from(lines)));
-        ui.set_lyrics_synced(!lyrics.starts.is_empty());
-        ui.set_lyrics_source(lyrics.source.into());
-        ui.set_lyrics_current(-1);
-        self.state.borrow_mut().lyric_starts = lyrics.starts;
-        // The bar's position, which is the restored one before playing.
-        self.show_lyric_line(f64::from(ui.get_np_position()));
-    }
-
-    /// Lights up the lyric line being sung at `position`, when synced lyrics
-    /// are on screen. A line starting before the next tick is lit by a timer,
-    /// so it lands on the beat.
-    pub(super) fn show_lyric_line(self: &Rc<Self>, position: f64) {
-        let ui = self.ui();
-        if !ui.get_lyrics_shown() {
-            return;
-        }
-        let (line, next) = {
-            let starts = &self.state.borrow().lyric_starts;
-            if starts.is_empty() {
-                return;
-            }
-            let line = starts.partition_point(|&start| start <= position);
-            (
-                line as i32 - 1,
-                // On the clock, as the timer counts.
-                starts
-                    .get(line)
-                    .map(|start| (start - position) / self.speed()),
-            )
-        };
-        ui.set_lyrics_current(line);
-        if let Some(wait) = next.filter(|&wait| wait < TICK.as_secs_f64())
-            && !self.player.is_paused()
-            // Until a track has started, the engine's position is not the bar's.
-            && self.state.borrow().playback.started
-        {
-            let weak = Rc::downgrade(self);
-            self.lyric_timer.start(
-                TimerMode::SingleShot,
-                Duration::from_secs_f64(wait),
-                move || {
-                    if let Some(app) = weak.upgrade() {
-                        app.show_lyric_line(app.player.position());
-                    }
-                },
-            );
-        }
     }
 }
 

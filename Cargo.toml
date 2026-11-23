@@ -21,6 +21,8 @@ clipboard-win = "5.4.3"
 # schedules it as audio.
 cpal = { version = "0.18.2", features = ["realtime"] }
 discord-rich-presence = "1.1.0"
+# Already built for Slint's images; inflates KuGou's lyrics.
+flate2 = "1.1"
 # Checks a proxy address as hyper-util will parse it.
 http = "1.5"
 # Already built for Slint; folds accents out of names animated artwork matches.
@@ -39,6 +41,8 @@ raw-window-handle = "0.6.2"
 # gzip and brotli are already in the tree through rustypipe; they let the
 # player endpoint and the player script answer compressed.
 reqwest = { version = "0.12", default-features = false, features = ["default-tls", "native-tls-alpn", "http2", "blocking", "gzip", "brotli", "socks", "system-proxy"] }
+# Already built for Slint's SVGs; reads Apple Music's TTML lyrics.
+roxmltree = "0.21"
 rquickjs = "0.9"
 rustypipe = { version = "=0.11.4", features = ["userdata"] }
 serde = { version = "1.0.229", features = ["derive"] }

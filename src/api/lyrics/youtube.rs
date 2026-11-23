@@ -4,31 +4,14 @@
 use serde::Deserialize;
 use serde_json::{Value, json, value::RawValue};
 
+use super::Lyrics;
+
 const BROWSE_URL: &str = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false";
 const VERSION: &str = "7.21.50";
 const USER_AGENT: &str =
     "com.google.android.apps.youtube.music/7.21.50 (Linux; U; Android 14) gzip";
 const LYRICS_DATA: &str =
     "/elementRenderer/newElement/type/componentType/model/timedLyricsModel/lyricsData";
-
-#[derive(Debug, Default, PartialEq)]
-pub struct Lyrics {
-    pub lines: Vec<String>,
-    /// Each line's start in seconds when the lyrics are synced, else empty.
-    pub starts: Vec<f64>,
-    /// Where the lyrics come from, such as "Source: Musixmatch".
-    pub source: String,
-}
-
-impl Lyrics {
-    pub fn plain(body: &str, source: String) -> Self {
-        Self {
-            lines: body.lines().map(str::to_owned).collect(),
-            starts: Vec::new(),
-            source,
-        }
-    }
-}
 
 #[derive(Deserialize)]
 struct Response<'a> {
@@ -60,7 +43,7 @@ struct CueRange {
 
 /// The lyrics `browse_id` names as the Android app is given them, or
 /// `None` when the answer is not in the shape expected.
-pub(super) async fn timed(browse_id: &str) -> Result<Option<Lyrics>, String> {
+pub(in crate::api) async fn timed(browse_id: &str) -> Result<Option<Lyrics>, String> {
     let body = json!({
         "context": { "client": {
             "clientName": "ANDROID_MUSIC",
@@ -113,6 +96,7 @@ fn parse(json: &str) -> Option<Lyrics> {
             .map(|line| line.lyric_line)
             .collect(),
         starts: starts.unwrap_or_default(),
+        words: Vec::new(),
         source: data.source_message,
     })
 }
@@ -139,6 +123,7 @@ mod tests {
                 lines: vec!["One".into(), "Two".into()],
                 starts: vec![1.5, 3.0],
                 source: "Source: Musixmatch".into(),
+                ..Lyrics::default()
             })
         );
     }

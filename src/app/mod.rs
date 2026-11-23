@@ -89,6 +89,7 @@ pub struct App {
     suggest_timer: Timer,
     sign_in_window: RefCell<Option<SignIn>>,
     sign_in_timer: Timer,
+    lyrics_pass: RefCell<Option<now_playing::lyrics::PassCheck>>,
     motion: Arc<crate::motion::Motion>,
     /// The full player's animated artwork, while one plays.
     motion_playing: RefCell<Option<now_playing::motion::Playing>>,
@@ -197,8 +198,7 @@ impl App {
                 queue,
                 queue_generation: 0,
                 playback: Playback::default(),
-                lyrics_for: None,
-                lyric_starts: Vec::new(),
+                lyrics: Default::default(),
                 suggest_generation: 0,
                 page_cache: HashMap::new(),
                 song_versions: HashMap::new(),
@@ -235,6 +235,7 @@ impl App {
             suggest_timer: Timer::default(),
             sign_in_window: RefCell::new(None),
             sign_in_timer: Timer::default(),
+            lyrics_pass: RefCell::new(None),
             motion: Arc::new(crate::motion::Motion::new()),
             motion_playing: RefCell::new(None),
             motion_timer: Timer::default(),
@@ -323,7 +324,14 @@ impl App {
     }
 
     fn show_playing(&self, playing: bool) {
-        self.ui().global::<ApiGlobal>().set_is_playing(playing);
+        let ui = self.ui();
+        ui.global::<ApiGlobal>().set_is_playing(playing);
+        // The words stop where the sound did, and the next tick starts them again.
+        if !playing {
+            let clock = ui.global::<crate::LyricsClock>();
+            clock.set_at(self.player.position() as f32);
+            clock.set_rate(0.0);
+        }
         self.sync_mini();
     }
 
