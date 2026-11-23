@@ -5,8 +5,7 @@
 #
 #   release-notes.sh <previous-tag> <tag> [previous-ref] [ref]
 #
-# The refs default to the tags. Locally this checkout shares its tags with
-# ytm-lite, so pass the commits from `git ls-remote --tags lily`.
+# The refs default to the tags.
 set -euo pipefail
 
 previous=$1
