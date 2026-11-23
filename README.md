@@ -66,7 +66,7 @@ Your Home feed, Explore, radio, autoplay, Smart Shuffle, repeat, history and sea
 <td width="33%" valign="top">
 
 ### Lyrics and queue
-Synced lyrics you can click to jump to, beside the page or full screen. A queue you drag into order, edit several songs at a time, and save as a playlist.
+Synced lyrics you can click to jump to, beside the page or full screen, filled in word by word where Apple Music, QQ Music or KuGou time them so. A queue you drag into order, edit several songs at a time, and save as a playlist.
 
 </td>
 <td width="33%" valign="top">
@@ -298,12 +298,12 @@ flowchart LR
 | Audio output | [cpal](https://github.com/RustAudio/cpal), through WASAPI |
 | Interface | [Slint](https://slint.dev), drawn by Skia on the GPU through Direct3D 12 |
 | Networking | reqwest over Windows Schannel and HTTP/2, on Tokio |
-| Google sign-in | WebView2 through [wry](https://github.com/tauri-apps/wry), only while signing in |
+| Sign-in, lyrics check | WebView2 through [wry](https://github.com/tauri-apps/wry), only while signing in or checking |
 | Media keys | [souvlaki](https://github.com/Sinono3/souvlaki) |
 
 Most YouTube clients get stream URLs that YouTube's player JavaScript has to unscramble. The visionOS client gets plain ones, so the app asks as that client and needs no JavaScript engine, falling back to Android VR and iOS if YouTube changes it. A daily check flags it when one of them stops working. With Premium, the app unscrambles the web player's URLs itself, in a short-lived QuickJS context with a cut-down copy of the player.
 
-The app talks to YouTube's hosts, checked against an allowlist, plus GitHub for updates and Last.fm if you connect it. It follows a proxy set by hand in Windows' settings, or one of your own in **Settings ▸ About**. It keeps everything in `%APPDATA%\Lily`, and moves the folder of versions named ytm-native there on its first start.
+The app talks to YouTube's hosts, checked against an allowlist, plus GitHub for updates, Better Lyrics' hub, lrc.red, LRCLIB and KuGou (Tencent Music, in China) for lyrics (sent a song's title, artist and length while lyrics are open, and the hub its video ID too; KuGou only when the others have no word timing), and Last.fm if you connect it. The hub wants a pass from Cloudflare's check, which the app runs about once a day in a hidden WebView2. It follows a proxy set by hand in Windows' settings, or one of your own in **Settings ▸ About**. It keeps everything in `%APPDATA%\Lily`, and moves the folder of versions named ytm-native there on its first start.
 
 </details>
 
@@ -336,6 +336,8 @@ Release builds write warnings, errors and crashes to `%APPDATA%\Lily\lily.log`, 
 ## Licence
 
 Lily is free software under the [GNU General Public License, version 3](LICENSE). It builds on [rustypipe](https://codeberg.org/ThetaDev/rustypipe), which is GPL-3.0, and on [Slint](https://slint.dev) under its GPL-3.0 option.
+
+Lyrics come partly from [Better Lyrics](https://github.com/better-lyrics/better-lyrics)' lyrics hub. Thanks to Better Lyrics for it.
 
 <br>
 
