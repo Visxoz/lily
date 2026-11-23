@@ -3,23 +3,28 @@
 
 use std::{future::Future, rc::Rc};
 
+use tokio::task::AbortHandle;
+
 use super::App;
 use crate::api::{self, Page};
 
 impl App {
-    /// Runs `work` on Tokio and `done` with its result on the UI thread.
+    /// Runs `work` on Tokio and `done` with its result on the UI thread;
+    /// aborted, neither carries on.
     pub(super) fn spawn<T: Outcome + Send + 'static>(
         self: &Rc<Self>,
         work: impl Future<Output = T> + Send + 'static,
         done: impl FnOnce(&Rc<Self>, T) + 'static,
-    ) {
+    ) -> AbortHandle {
         let handle = self.rt.spawn(work);
+        let abort = handle.abort_handle();
         let app = Rc::clone(self);
         let _ = slint::spawn_local(async move {
             if let Some(value) = outcome(handle.await) {
                 done(&app, value);
             }
         });
+        abort
     }
 }
 
