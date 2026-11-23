@@ -11,6 +11,7 @@ mod images;
 mod lastfm;
 mod local;
 mod logger;
+mod motion;
 mod platform;
 mod presence;
 mod queue;

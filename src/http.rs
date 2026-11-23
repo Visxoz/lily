@@ -104,10 +104,14 @@ pub fn within(url: &Url, domains: &[&str]) -> bool {
 
 /// Follows redirects only within `domains`; any other fails the request.
 pub fn redirects(domains: &'static [&'static str]) -> redirect::Policy {
+    redirects_if(move |url| within(url, domains))
+}
+
+fn redirects_if(allowed: impl Fn(&Url) -> bool + Send + Sync + 'static) -> redirect::Policy {
     redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= MAX_REDIRECTS {
             attempt.error("too many redirects")
-        } else if within(attempt.url(), domains) {
+        } else if allowed(attempt.url()) {
             attempt.follow()
         } else {
             let origin = attempt.url().origin().ascii_serialization();
@@ -258,6 +262,42 @@ pub fn client() -> &'static reqwest::Client {
         proxied(keep_alive(reqwest::Client::builder()))
             .timeout(Duration::from_secs(15))
             .redirect(redirects(ALLOWED_DOMAINS))
+            .build()
+            .expect("HTTP client builds")
+    })
+}
+
+/// Apple Music's and Spotify's web players, APIs and clips, for animated
+/// artwork. Exact hosts, as nothing else on those domains is needed.
+const MOTION_HOSTS: &[&str] = &[
+    "music.apple.com",
+    "amp-api.music.apple.com",
+    "mvod.itunes.apple.com",
+    "open.spotify.com",
+    "open.spotifycdn.com",
+    "api-partner.spotify.com",
+    "spclient.wg.spotify.com",
+    "canvaz.scdn.co",
+];
+
+/// Every URL from Apple's and Spotify's answers is checked with this.
+pub fn motion_allowed(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| MOTION_HOSTS.contains(&host))
+}
+
+/// For animated artwork: a read timeout rather than a whole one, as scripts
+/// and clips run to megabytes.
+pub fn motion_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        proxied(keep_alive(reqwest::Client::builder()))
+            .user_agent(crate::streams::premium::WEB_USER_AGENT)
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(20))
+            .redirect(redirects_if(motion_allowed))
             .build()
             .expect("HTTP client builds")
     })
