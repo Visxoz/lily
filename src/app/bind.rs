@@ -78,6 +78,7 @@ impl App {
         on!(on_toggle_mini_player, |app| app.toggle_mini_player());
         on!(on_full_player_changed, |app| {
             app.load_cover();
+            app.refresh_motion();
             let ui = app.ui();
             if ui.get_full_player() {
                 app.load_lyrics();
@@ -123,6 +124,12 @@ impl App {
             app.update_settings(|s| s.normalise = level);
             app.player.set_normalise(level);
         });
+        on!(on_set_animated_art, |app, value| {
+            app.update_settings(|s| s.animated_art = value);
+            app.refresh_motion();
+        });
+        on!(on_spotify_sign_in, |app| app.sign_in_to_spotify());
+        on!(on_spotify_sign_out, |app| app.sign_out_of_spotify());
         on!(on_set_discord, |app, value| {
             app.update_settings(|s| s.discord = value);
             app.update_presence();

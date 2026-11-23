@@ -27,6 +27,7 @@ impl App {
         ui.set_repeat_mode(settings.repeat);
         ui.set_normalise(settings.normalise.index());
         ui.set_discord(settings.discord);
+        ui.set_animated_art(settings.animated_art);
         ui.set_autoplay(settings.autoplay);
         ui.set_youtube_history(settings.youtube_history);
         ui.set_rating_buttons(settings.rating_buttons);

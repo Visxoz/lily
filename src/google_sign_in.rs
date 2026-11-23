@@ -1,5 +1,6 @@
-//! Signing in on Google's own page, in a WebView2 window. Once that reaches
-//! YouTube Music signed in, its cookies sign the app in as pasted ones do.
+//! Signing in on Google's or Spotify's own page, in a WebView2 window. Once
+//! Google's reaches YouTube Music signed in, its cookies sign the app in as
+//! pasted ones do; Spotify's hands over the web player's session cookie.
 
 use raw_window_handle::HasWindowHandle;
 use slint::ComponentHandle;
@@ -70,16 +71,75 @@ fn is_allowed(url: &Url) -> bool {
     match url.host_str() {
         Some(MUSIC_HOST) => true,
         Some(HANDOFF_HOST) => url.path() == HANDOFF_PATH,
-        Some(host) => SIGN_IN_HOSTS.contains(&host) || is_google_accounts_host(host),
+        Some(host) => is_google_sign_in_host(host),
         None => false,
     }
 }
 
-fn on_navigation(url: &str) -> bool {
+fn is_google_sign_in_host(host: &str) -> bool {
+    SIGN_IN_HOSTS.contains(&host) || is_google_accounts_host(host)
+}
+
+/// Spotify's sign-in, and its login partners'. Exact hosts, so lookalikes
+/// such as accounts.spotify.com.example.com are refused.
+const SPOTIFY_HOSTS: &[&str] = &[
+    "accounts.spotify.com",
+    "challenge.spotify.com",
+    SPOTIFY_PLAYER_HOST,
+    "www.spotify.com",
+    "appleid.apple.com",
+    "www.facebook.com",
+    "m.facebook.com",
+];
+const SPOTIFY_PLAYER_HOST: &str = "open.spotify.com";
+const SPOTIFY_PLAYER_URL: &str = "https://open.spotify.com/";
+const SPOTIFY_START_URL: &str =
+    "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F";
+/// The web player's session, the only sign-in Spotify gives Canvas to.
+const SPOTIFY_SESSION_COOKIE: &str = "sp_dc";
+
+/// Continuing with Google passes through its own sign-in's hosts.
+fn is_spotify_allowed(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| SPOTIFY_HOSTS.contains(&host) || is_google_sign_in_host(host))
+}
+
+/// A site whose own page signs in, and what its cookies hand the app.
+pub struct Site {
+    /// Named in the window's title.
+    name: &'static str,
+    start: &'static str,
+    allows: fn(&Url) -> bool,
+    session: fn(&WebView) -> Option<String>,
+}
+
+pub static GOOGLE: Site = Site {
+    name: "YouTube Music",
+    start: START_URL,
+    allows: is_allowed,
+    session: google_session,
+};
+
+pub static SPOTIFY: Site = Site {
+    name: "Spotify",
+    start: SPOTIFY_START_URL,
+    allows: is_spotify_allowed,
+    session: spotify_session,
+};
+
+impl Site {
+    pub fn is_google(&self) -> bool {
+        std::ptr::eq(self, &GOOGLE)
+    }
+}
+
+fn on_navigation(url: &str, allows: fn(&Url) -> bool) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
-    let allowed = is_allowed(&parsed);
+    let allowed = allows(&parsed);
     if !allowed {
         // Origin and path only: sign-in query strings carry session tokens.
         log::info!(
@@ -105,21 +165,24 @@ fn open_in_browser(url: &str) {
     }
 }
 
-pub struct GoogleSignIn {
+pub struct SignIn {
+    site: &'static Site,
     window: SignInWindow,
     webview: Option<WebView>,
     context: WebContext,
 }
 
-impl GoogleSignIn {
+impl SignIn {
     /// Shows the window; `attach` then places the page in it.
-    pub fn open() -> Result<Self, String> {
+    pub fn open(site: &'static Site) -> Result<Self, String> {
         let window = SignInWindow::new().map_err(|e| e.to_string())?;
+        window.set_site(site.name.into());
         window.show().map_err(|e| e.to_string())?;
         // In private mode the page's cookies stay in memory; the folder only
         // keeps WebView2's own files out of the exe's directory.
         let context = WebContext::new(Some(crate::settings::data_dir().join("webview")));
         Ok(Self {
+            site,
             window,
             webview: None,
             context,
@@ -133,8 +196,9 @@ impl GoogleSignIn {
         if handle.window_handle().is_err() {
             return Ok(false);
         }
+        let allows = self.site.allows;
         let webview = WebViewBuilder::new_with_web_context(&mut self.context)
-            .with_url(START_URL)
+            .with_url(self.site.start)
             .with_incognito(true)
             .with_additional_browser_args(browser_args())
             .with_bounds(bounds(&self.window))
@@ -143,14 +207,14 @@ impl GoogleSignIn {
                     on_page();
                 }
             })
-            .with_navigation_handler(|url| on_navigation(&url))
+            .with_navigation_handler(move |url| on_navigation(&url, allows))
             .with_new_window_req_handler(|url, _| {
                 open_in_browser(&url);
                 NewWindowResponse::Deny
             })
             .with_download_started_handler(|_, _| false)
             .build_as_child(&handle)
-            .map_err(|e| format!("could not open Google's sign-in page: {e}"))?;
+            .map_err(|e| format!("could not open {}'s sign-in page: {e}", self.site.name))?;
         self.webview = Some(webview);
         Ok(true)
     }
@@ -165,33 +229,54 @@ impl GoogleSignIn {
         }
     }
 
-    /// The session's `Cookie` header, once the page is on YouTube Music
-    /// signed in.
-    pub fn cookie(&self) -> Option<String> {
-        let webview = self.webview.as_ref()?;
-        if !webview.url().ok()?.starts_with(MUSIC_URL) {
-            return None;
-        }
-        let cookies = webview.cookies_for_url(MUSIC_URL).ok()?;
-        if !cookies.iter().any(|c| SESSION_COOKIES.contains(&c.name())) {
-            return None;
-        }
-        if cookies
-            .iter()
-            .any(|c| c.name().ends_with(BOUND_SESSION_COOKIE))
-        {
-            // BROWSER_ARGS did not take (renamed feature, policy or env
-            // override). Kept rather than refused, as it works for a while.
-            log::warn!("Google bound the sign-in to the sign-in window, so it will lapse");
-        }
-        Some(
-            cookies
-                .iter()
-                .map(|c| format!("{}={}", c.name(), c.value()))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
+    pub fn site(&self) -> &'static Site {
+        self.site
     }
+
+    /// The session the site hands over, once its page is signed in.
+    pub fn session(&self) -> Option<String> {
+        (self.site.session)(self.webview.as_ref()?)
+    }
+}
+
+/// The session's `Cookie` header, once the page is on YouTube Music signed in.
+fn google_session(webview: &WebView) -> Option<String> {
+    if !webview.url().ok()?.starts_with(MUSIC_URL) {
+        return None;
+    }
+    let cookies = webview.cookies_for_url(MUSIC_URL).ok()?;
+    if !cookies.iter().any(|c| SESSION_COOKIES.contains(&c.name())) {
+        return None;
+    }
+    if cookies
+        .iter()
+        .any(|c| c.name().ends_with(BOUND_SESSION_COOKIE))
+    {
+        // BROWSER_ARGS did not take (renamed feature, policy or env
+        // override). Kept rather than refused, as it works for a while.
+        log::warn!("Google bound the sign-in to the sign-in window, so it will lapse");
+    }
+    Some(
+        cookies
+            .iter()
+            .map(|c| format!("{}={}", c.name(), c.value()))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+/// The `sp_dc` cookie's value, once the page is on the web player.
+fn spotify_session(webview: &WebView) -> Option<String> {
+    let url = Url::parse(&webview.url().ok()?).ok()?;
+    if url.host_str() != Some(SPOTIFY_PLAYER_HOST) {
+        return None;
+    }
+    webview
+        .cookies_for_url(SPOTIFY_PLAYER_URL)
+        .ok()?
+        .into_iter()
+        .find(|c| c.name() == SPOTIFY_SESSION_COOKIE && !c.value().is_empty())
+        .map(|c| c.value().to_owned())
 }
 
 fn bounds(window: &SignInWindow) -> Rect {
@@ -242,7 +327,21 @@ mod tests {
         assert!(!allowed("https://support.google.com/accounts"));
         assert!(!allowed("https://example.com/"));
         assert!(!allowed("file:///C:/Windows/System32/calc.exe"));
-        assert!(!on_navigation("javascript:alert(1)"));
-        assert!(!on_navigation("not a url"));
+        assert!(!on_navigation("javascript:alert(1)", is_allowed));
+        assert!(!on_navigation("not a url", is_allowed));
+    }
+
+    #[test]
+    fn spotify_keeps_to_its_sign_in() {
+        let allowed = |url: &str| is_spotify_allowed(&Url::parse(url).unwrap());
+        assert!(allowed("https://accounts.spotify.com/en/login"));
+        assert!(allowed("https://open.spotify.com/"));
+        assert!(allowed("https://accounts.google.com/o/oauth2/auth"));
+        assert!(allowed("https://appleid.apple.com/auth/authorize"));
+        assert!(!allowed("http://accounts.spotify.com/"), "plain HTTP");
+        assert!(!allowed("https://accounts.spotify.com.evil.com/"));
+        assert!(!allowed("https://spotify.com/"));
+        assert!(!allowed("https://music.youtube.com/"));
+        assert!(!allowed("https://www.spotify.com.evil.com/"));
     }
 }

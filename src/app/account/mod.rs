@@ -2,6 +2,7 @@
 //! playlists and pins, and Last.fm.
 
 pub(super) mod scrobble;
+pub(super) mod spotify;
 
 use std::{cell::Cell, rc::Rc, time::Duration};
 
@@ -11,7 +12,7 @@ use super::{App, browse::items::card_item};
 use crate::{
     Api as ApiGlobal, CardItem,
     api::{Card, Route},
-    google_sign_in::GoogleSignIn,
+    google_sign_in::{self, SignIn, Site},
     images, settings,
 };
 
@@ -69,10 +70,18 @@ impl App {
     }
 
     pub(super) fn sign_in_with_google(self: &Rc<Self>) {
-        if let Some(open) = self.google_sign_in.borrow().as_ref() {
+        self.open_sign_in(&google_sign_in::GOOGLE);
+    }
+
+    /// One sign-in window at a time, as both share WebView2's folder.
+    pub(super) fn open_sign_in(self: &Rc<Self>, site: &'static Site) {
+        if let Some(open) = self.sign_in_window.borrow().as_ref()
+            && std::ptr::eq(open.site(), site)
+        {
             let _ = open.window().show();
             return;
         }
+        self.close_sign_in();
         // Each step is deferred: WebView2 calls back from inside its own
         // events, and the window must not be dropped from its own handler.
         let weak = Rc::downgrade(self);
@@ -80,18 +89,18 @@ impl App {
             let weak = weak.clone();
             Timer::single_shot(Duration::ZERO, move || {
                 if let Some(app) = weak.upgrade() {
-                    app.check_google_sign_in();
+                    app.check_sign_in_window();
                 }
             });
         };
-        let open = match GoogleSignIn::open() {
+        let open = match SignIn::open(site) {
             Ok(open) => open,
-            Err(e) => return self.google_sign_in_failed(&e),
+            Err(e) => return self.sign_in_failed(site, &e),
         };
         let weak = Rc::downgrade(self);
         open.window().on_resized(move || {
             if let Some(app) = weak.upgrade()
-                && let Some(open) = app.google_sign_in.borrow().as_ref()
+                && let Some(open) = app.sign_in_window.borrow().as_ref()
             {
                 open.fit();
             }
@@ -101,15 +110,19 @@ impl App {
             let weak = weak.clone();
             Timer::single_shot(Duration::ZERO, move || {
                 if let Some(app) = weak.upgrade() {
-                    app.close_google_sign_in();
+                    app.close_sign_in();
                 }
             });
             slint::CloseRequestResponse::HideWindow
         });
-        *self.google_sign_in.borrow_mut() = Some(open);
+        *self.sign_in_window.borrow_mut() = Some(open);
         let ui = self.ui();
-        ui.set_sign_in_error(SharedString::new());
-        ui.set_signing_in_browser(true);
+        if site.is_google() {
+            ui.set_sign_in_error(SharedString::new());
+            ui.set_signing_in_browser(true);
+        } else {
+            ui.set_spotify_signing_in(true);
+        }
 
         // Windows creates the window a moment after it is shown. The page is
         // attached with the window out of its cell, as WebView2 pumps
@@ -119,48 +132,60 @@ impl App {
         self.sign_in_timer
             .start(TimerMode::Repeated, Duration::from_millis(50), move || {
                 let Some(app) = weak.upgrade() else { return };
-                let Some(mut open) = app.google_sign_in.borrow_mut().take() else {
+                let Some(mut open) = app.sign_in_window.borrow_mut().take() else {
                     app.sign_in_timer.stop();
                     return;
                 };
                 let result = open.attach(on_page.clone());
-                *app.google_sign_in.borrow_mut() = Some(open);
+                *app.sign_in_window.borrow_mut() = Some(open);
                 attempts.set(attempts.get() + 1);
                 match result {
                     Ok(false) if attempts.get() < 100 => return,
-                    Ok(false) => app.google_sign_in_failed("the sign-in window did not open"),
+                    Ok(false) => app.sign_in_failed(site, "the sign-in window did not open"),
                     Ok(true) => {}
-                    Err(e) => app.google_sign_in_failed(&e),
+                    Err(e) => app.sign_in_failed(site, &e),
                 }
                 app.sign_in_timer.stop();
             });
     }
 
-    fn google_sign_in_failed(&self, error: &str) {
+    fn sign_in_failed(self: &Rc<Self>, site: &'static Site, error: &str) {
         log::warn!("{error}");
-        self.close_google_sign_in();
-        self.ui().set_sign_in_error(
-            format!("Couldn't sign in with Google: {error}. You can paste cookies instead.").into(),
-        );
+        self.close_sign_in();
+        if site.is_google() {
+            self.ui().set_sign_in_error(
+                format!("Couldn't sign in with Google: {error}. You can paste cookies instead.")
+                    .into(),
+            );
+        } else {
+            self.toast(format!("Couldn't sign in to Spotify: {error}"));
+        }
     }
 
-    fn check_google_sign_in(self: &Rc<Self>) {
-        let cookie = self
-            .google_sign_in
+    fn check_sign_in_window(self: &Rc<Self>) {
+        let session = self
+            .sign_in_window
             .borrow()
             .as_ref()
-            .and_then(GoogleSignIn::cookie);
-        if let Some(cookie) = cookie {
-            self.close_google_sign_in();
+            .and_then(|open| Some((open.site().is_google(), open.session()?)));
+        let Some((google, cookie)) = session else {
+            return;
+        };
+        self.close_sign_in();
+        if google {
             self.sign_in(cookie);
+        } else {
+            self.spotify_signed_in(cookie);
         }
     }
 
-    fn close_google_sign_in(&self) {
-        if let Some(open) = self.google_sign_in.borrow_mut().take() {
+    pub(super) fn close_sign_in(&self) {
+        if let Some(open) = self.sign_in_window.borrow_mut().take() {
             let _ = open.window().hide();
         }
-        self.ui().set_signing_in_browser(false);
+        let ui = self.ui();
+        ui.set_signing_in_browser(false);
+        ui.set_spotify_signing_in(false);
     }
 
     pub(super) fn load_library(self: &Rc<Self>) {

@@ -32,7 +32,7 @@ fn set_animated(window: &Window, on: bool) {
     };
 }
 
-fn is_shown(ui: &AppWindow) -> bool {
+pub(super) fn is_shown(ui: &AppWindow) -> bool {
     ui.window().is_visible() && !crate::is_minimized(ui)
 }
 

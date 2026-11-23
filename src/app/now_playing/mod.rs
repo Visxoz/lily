@@ -2,6 +2,7 @@
 //! panel, the media overlay and Discord.
 
 pub(super) mod mini;
+pub(super) mod motion;
 pub(super) mod queue_panel;
 
 use std::{rc::Rc, time::Duration};
@@ -67,7 +68,9 @@ impl App {
         self.refresh_queue();
         self.persist_soon();
         self.update_presence();
+        // A retry or reopen of the same song keeps its clip going.
         if new_song {
+            self.refresh_motion();
             self.load_rating(track.id.clone());
             let mut state = self.state.borrow_mut();
             state.lyrics_for = None;

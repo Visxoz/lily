@@ -31,7 +31,7 @@ use crate::{
     api::{self, Api, Page, Route},
     audio::{Player, PlayerEvent, eq},
     downloads::Downloads,
-    google_sign_in::GoogleSignIn,
+    google_sign_in::SignIn,
     images, local,
     platform::media_controls::{Action, Controls},
     presence::PresenceHandle,
@@ -87,8 +87,14 @@ pub struct App {
     premium_shown: Cell<u8>,
     toast_timer: Timer,
     suggest_timer: Timer,
-    google_sign_in: RefCell<Option<GoogleSignIn>>,
+    sign_in_window: RefCell<Option<SignIn>>,
     sign_in_timer: Timer,
+    motion: Arc<crate::motion::Motion>,
+    /// The full player's animated artwork, while one plays.
+    motion_playing: RefCell<Option<now_playing::motion::Playing>>,
+    motion_timer: Timer,
+    /// Bumped as the clip is stopped, so a late lookup starts none.
+    motion_generation: Cell<u64>,
     update: RefCell<Option<update::Update>>,
     update_timer: Timer,
     cookie_timer: Timer,
@@ -227,8 +233,12 @@ impl App {
             premium_shown: Cell::new(u8::MAX),
             toast_timer: Timer::default(),
             suggest_timer: Timer::default(),
-            google_sign_in: RefCell::new(None),
+            sign_in_window: RefCell::new(None),
             sign_in_timer: Timer::default(),
+            motion: Arc::new(crate::motion::Motion::new()),
+            motion_playing: RefCell::new(None),
+            motion_timer: Timer::default(),
+            motion_generation: Cell::new(0),
             update: RefCell::new(None),
             update_timer: Timer::default(),
             cookie_timer: Timer::default(),
@@ -247,6 +257,7 @@ impl App {
         app.bind(ui);
         app.attach_tray();
         app.apply_settings_to_ui(ui);
+        ui.set_spotify_signed_in(app.motion.spotify_signed_in());
         let proxy = crate::http::proxy_in_use();
         ui.set_proxy_detail(proxy_detail(proxy.is_some(), false).into());
         ui.set_proxy_address(proxy.unwrap_or_default().into());

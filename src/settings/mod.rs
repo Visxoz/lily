@@ -220,6 +220,9 @@ pub struct Settings {
     pub balance: f32,
     pub look: Look,
     pub accent: Accent,
+    /// The full player plays the song's Spotify Canvas or its album's Apple
+    /// Music motion cover, where there is one.
+    pub animated_art: bool,
     pub window: Option<WindowGeometry>,
     /// Where the mini player was last put, in physical pixels.
     pub mini_position: Option<(i32, i32)>,
@@ -319,6 +322,7 @@ impl Default for Settings {
             balance: 0.0,
             look: Look::Black,
             accent: Accent::Lily,
+            animated_art: false,
             window: None,
             mini_position: None,
             local_folders: Vec::new(),

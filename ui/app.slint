@@ -86,6 +86,8 @@ export component AppWindow inherits Window {
     in property <image> np-cover;
     /// The artwork's colours, blended, behind the full player.
     in property <image> np-backdrop;
+    /// The animated artwork's frame, while one plays.
+    in property <image> np-motion;
     in property <color> np-accent: #3a3a3a;
     in property <float> np-duration;
     in property <float> np-position;
@@ -145,6 +147,9 @@ export component AppWindow inherits Window {
     in property <bool> automix;
     in property <bool> pause-on-unplug;
     in property <bool> close-to-tray;
+    in property <bool> animated-art;
+    in property <bool> spotify-signed-in;
+    in property <bool> spotify-signing-in;
     /// "System default", then each output device; the chosen one's index,
     /// or -1 while it is unplugged.
     in property <[string]> output-devices;
@@ -254,6 +259,9 @@ export component AppWindow inherits Window {
     callback set-automix(value: bool);
     callback set-pause-on-unplug(value: bool);
     callback set-close-to-tray(value: bool);
+    callback set-animated-art(value: bool);
+    callback spotify-sign-in();
+    callback spotify-sign-out();
     callback list-output-devices();
     callback set-output-device(index: int);
     callback set-speed(index: int);
@@ -422,6 +430,7 @@ export component AppWindow inherits Window {
         if root.full-player: FullPlayer {
             art: root.np-cover.width > 0 ? root.np-cover : root.np-art;
             backdrop: root.np-backdrop;
+            motion: root.np-motion;
             title: root.np-title;
             artists: root.np-artists;
             next: root.up-next < 0 ? "" : "Next: " + root.queue[root.up-next].title + "  •  " + root.queue[root.up-next].artists;
@@ -623,6 +632,12 @@ export component AppWindow inherits Window {
             accent-choice: root.accent-choice;
             close-to-tray: root.close-to-tray;
             set-close-to-tray(v) => { root.set-close-to-tray(v); }
+            animated-art: root.animated-art;
+            spotify-signed-in: root.spotify-signed-in;
+            spotify-signing-in: root.spotify-signing-in;
+            set-animated-art(v) => { root.set-animated-art(v); }
+            spotify-sign-in => { root.spotify-sign-in(); }
+            spotify-sign-out => { root.spotify-sign-out(); }
             lastfm-available: root.lastfm-available;
             lastfm-user: root.lastfm-user;
             lastfm-connecting: root.lastfm-connecting;
@@ -697,9 +712,10 @@ export component AppWindow inherits Window {
     }
 }
 
-/// Holds Google's sign-in page, which the app places over it.
+/// Holds Google's or Spotify's sign-in page, which the app places over it.
 export component SignInWindow inherits Window {
-    title: "Sign in to YouTube Music";
+    in property <string> site: "YouTube Music";
+    title: "Sign in to " + root.site;
     // White like Google's page, which covers it once loaded, in every look.
     background: #ffffff;
     preferred-width: 480px;

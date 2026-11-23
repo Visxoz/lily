@@ -163,6 +163,9 @@ export component SettingsDialog inherits Dialog {
     in property <[AccentChoice]> accents;
     in property <int> accent-choice;
     in property <bool> close-to-tray;
+    in property <bool> animated-art;
+    in property <bool> spotify-signed-in;
+    in property <bool> spotify-signing-in;
     in property <bool> lastfm-available;
     in property <string> lastfm-user;
     in property <bool> lastfm-connecting;
@@ -187,6 +190,9 @@ export component SettingsDialog inherits Dialog {
     callback set-look(index: int);
     callback set-accent(index: int);
     callback set-close-to-tray(value: bool);
+    callback set-animated-art(value: bool);
+    callback spotify-sign-in();
+    callback spotify-sign-out();
     callback lastfm-connect();
     callback lastfm-disconnect();
     callback install-update();
@@ -430,6 +436,32 @@ export component SettingsDialog inherits Dialog {
             detail: "Closing the window keeps the music playing, with Lily's icon in the system tray to bring it back or quit.";
             checked: root.close-to-tray;
             toggled(v) => { root.set-close-to-tray(v); }
+        }
+
+        ToggleRow {
+            label: "Animated artwork";
+            detail: "The full player plays the song's Spotify Canvas once signed in below, or else its album's Apple Music motion cover.";
+            checked: root.animated-art;
+            toggled(v) => { root.set-animated-art(v); }
+        }
+
+        if root.animated-art: SettingRow {
+            label: "Spotify Canvas";
+            detail: root.spotify-signed-in ? "Signed in: songs with a Canvas show it."
+                : root.spotify-signing-in ? "Sign in on Spotify's page."
+                : "Each song's looping clip, where it has one, ahead of Apple Music's album covers.";
+            PillButton {
+                y: (parent.height - self.height) / 2;
+                text: root.spotify-signed-in ? "Sign out" : root.spotify-signing-in ? "Cancel" : "Sign in";
+                small: true;
+                clicked => {
+                    if root.spotify-signed-in || root.spotify-signing-in {
+                        root.spotify-sign-out();
+                    } else {
+                        root.spotify-sign-in();
+                    }
+                }
+            }
         }
     }
 

@@ -8,6 +8,8 @@ export component Lyrics inherits Flickable {
     in property <int> current: -1;
     in property <string> source;
     in property <length> line-size: 22px;
+    /// The lines not being sung.
+    in property <float> rest-opacity: 0.5;
     callback line-clicked(index: int);
 
     // An ease-out glide, written on whole pixels as the lists scroll.
@@ -73,7 +75,7 @@ export component Lyrics inherits Flickable {
             font-weight: 700;
             font-family: Theme.display-font;
             color: Theme.text;
-            opacity: !root.synced || self.is-current ? 1 : touch.has-hover ? 0.8 : 0.5;
+            opacity: !root.synced || self.is-current ? 1 : touch.has-hover ? 0.8 : root.rest-opacity;
             animate opacity { duration: Theme.normal; }
 
             touch := TouchArea {
