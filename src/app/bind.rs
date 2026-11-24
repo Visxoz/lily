@@ -7,6 +7,7 @@ use crate::{
     Api as ApiGlobal, AppWindow, LyricsExtras,
     api::{Rating, Route},
     audio::eq,
+    scrobbling::Service,
     settings::{Accent, Look, Quality},
 };
 
@@ -228,7 +229,12 @@ impl App {
             app.apply_accent(&app.ui());
         });
         on!(on_lastfm_connect, |app| app.connect_lastfm());
-        on!(on_lastfm_disconnect, |app| app.disconnect_lastfm());
+        on!(on_lastfm_disconnect, |app| app
+            .disconnect_scrobbling(Service::LastFm));
+        on!(on_listenbrainz_connect, |app, token| app
+            .connect_listenbrainz(&token));
+        on!(on_listenbrainz_disconnect, |app| app
+            .disconnect_scrobbling(Service::ListenBrainz));
         on!(on_set_youtube_history, |app, value| app
             .update_settings(|s| s.youtube_history = value));
         on!(on_set_rating_buttons, |app, value| app

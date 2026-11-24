@@ -73,6 +73,7 @@ component ChoiceButton {
 component AddressField inherits Rectangle {
     in property <string> placeholder;
     in property <string> name;
+    in property <bool> secret;
     callback accepted(text: string) -> string;
     callback edited();
     width: 180px;
@@ -94,6 +95,7 @@ component AddressField inherits Rectangle {
         height: 100%;
         vertical-alignment: center;
         single-line: true;
+        input-type: root.secret ? InputType.password : InputType.text;
         font-size: 13px;
         color: Theme.text;
         selection-background-color: Theme.accent.with-alpha(0.5);
@@ -169,6 +171,8 @@ export component SettingsDialog inherits Dialog {
     in property <bool> lastfm-available;
     in property <string> lastfm-user;
     in property <bool> lastfm-connecting;
+    in property <string> listenbrainz-user;
+    in property <bool> listenbrainz-connecting;
     in property <[string]> local-folders;
     in property <string> proxy-detail;
     /// The saved proxy without any password, or none.
@@ -195,6 +199,8 @@ export component SettingsDialog inherits Dialog {
     callback spotify-sign-out();
     callback lastfm-connect();
     callback lastfm-disconnect();
+    callback listenbrainz-connect(token: string);
+    callback listenbrainz-disconnect();
     callback install-update();
     callback sign-out();
     callback add-folder();
@@ -514,6 +520,29 @@ export component SettingsDialog inherits Dialog {
                     } else {
                         root.lastfm-connect();
                     }
+                }
+            }
+        }
+
+        SettingRow {
+            label: "ListenBrainz";
+            detail: root.listenbrainz-connecting ? "Checking the token."
+                : root.listenbrainz-user != "" ? "Scrobbling what you play as " + root.listenbrainz-user + "."
+                : "Logs what you play to ListenBrainz. Paste the user token from your ListenBrainz settings.";
+            if root.listenbrainz-connecting || root.listenbrainz-user != "": PillButton {
+                y: (parent.height - self.height) / 2;
+                text: root.listenbrainz-connecting ? "Cancel" : "Disconnect";
+                small: true;
+                clicked => { root.listenbrainz-disconnect(); }
+            }
+            if !root.listenbrainz-connecting && root.listenbrainz-user == "": AddressField {
+                y: (parent.height - self.height) / 2;
+                placeholder: "User token";
+                name: "ListenBrainz user token";
+                secret: true;
+                accepted(text) => {
+                    root.listenbrainz-connect(text);
+                    return "";
                 }
             }
         }

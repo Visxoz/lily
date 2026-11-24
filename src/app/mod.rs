@@ -102,7 +102,7 @@ pub struct App {
     update_timer: Timer,
     cookie_timer: Timer,
     persist_timer: Timer,
-    /// Retries scrobbles Last.fm could not take.
+    /// Retries scrobbles a service could not take.
     scrobble_timer: Timer,
     /// The signed-in Home, asked for as the app starts, for the first visit.
     home_ahead: RefCell<Option<HomeAhead>>,
@@ -395,8 +395,8 @@ impl App {
             }
         }
         self.warm_premium();
-        self.show_lastfm();
-        // Plays left over from a run that could not reach Last.fm.
+        self.show_scrobbling();
+        // Plays left over from a run that could not reach a service.
         self.send_scrobbles();
         self.navigate(Route::Home, false);
         // Once at startup, then again on their timers for a copy left running.

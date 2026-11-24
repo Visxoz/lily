@@ -1,5 +1,5 @@
 //! Signing in to YouTube Music and keeping the session, the sidebar's
-//! playlists and pins, and Last.fm.
+//! playlists and pins, and scrobbling to Last.fm and ListenBrainz.
 
 pub(super) mod scrobble;
 pub(super) mod spotify;

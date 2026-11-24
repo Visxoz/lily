@@ -172,6 +172,10 @@ export component AppWindow inherits Window {
     in property <bool> lastfm-available;
     in property <string> lastfm-user;
     in property <bool> lastfm-connecting;
+    // ListenBrainz: the connected account's name or empty, and whether its
+    // token is being checked.
+    in property <string> listenbrainz-user;
+    in property <bool> listenbrainz-connecting;
     property <bool> eq-open;
     in-out property <bool> equaliser;
     in property <[float]> eq-gains;
@@ -277,6 +281,9 @@ export component AppWindow inherits Window {
     callback lastfm-connect();
     /// Also stops waiting for a connection.
     callback lastfm-disconnect();
+    callback listenbrainz-connect(token: string);
+    /// Also stops checking a token.
+    callback listenbrainz-disconnect();
     callback set-equaliser(on: bool);
     callback set-eq-preset(index: int);
     /// A band's slider, from 0 to 1, moved; `done` once it is let go.
@@ -653,6 +660,10 @@ export component AppWindow inherits Window {
             set-quality(i) => { root.set-quality(i); }
             lastfm-connect => { root.lastfm-connect(); }
             lastfm-disconnect => { root.lastfm-disconnect(); }
+            listenbrainz-user: root.listenbrainz-user;
+            listenbrainz-connecting: root.listenbrainz-connecting;
+            listenbrainz-connect(token) => { root.listenbrainz-connect(token); }
+            listenbrainz-disconnect => { root.listenbrainz-disconnect(); }
             set-look(i) => { root.set-look(i); }
             set-accent(i) => { root.set-accent(i); }
             set-normalise(v) => { root.set-normalise(v); }

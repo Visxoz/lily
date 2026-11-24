@@ -49,11 +49,9 @@ impl Outcome for Result<Page, Option<Vec<api::Section>>> {
     }
 }
 
-impl<T> Outcome for Result<T, crate::lastfm::Error> {
+impl<T> Outcome for Result<T, crate::scrobbling::Error> {
     fn panicked() -> Option<Self> {
-        Some(Err(crate::lastfm::Error::Failed(
-            "something went wrong".to_owned(),
-        )))
+        Some(Err(crate::scrobbling::failed("something went wrong")))
     }
 }
 
