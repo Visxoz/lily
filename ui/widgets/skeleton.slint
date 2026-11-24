@@ -10,7 +10,8 @@ component Placeholder inherits Rectangle {
     out property <float> pulse: root.due && !Api.minimised ? 0.5 - 0.5 * cos(mod(animation-tick() / 1600ms, 1) * 360deg) : 0;
     opacity: root.due && root.loading ? 1 : 0;
     clip: true;
-    animate opacity { duration: 260ms; }
+    // Leaves quicker, so it doesn't show through the page.
+    animate opacity { duration: root.loading ? 260ms : 180ms; }
     Timer {
         interval: 150ms;
         running: !root.due && root.loading;

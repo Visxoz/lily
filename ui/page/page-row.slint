@@ -25,8 +25,28 @@ export component PageRow {
             Api.row-art(root.index);
         }
     }
-    init => { root.ask-art(); }
+    init => {
+        root.ask-art();
+        if !root.fade-in {
+            root.started = true;
+        }
+    }
     changed art-key => { root.ask-art(); }
+
+    /// Fades in once shown.
+    in property <bool> fade-in;
+    // Set a frame after creation, so the fade has a start to animate from.
+    property <bool> started;
+    opacity: root.started ? 1 : 0;
+    animate opacity {
+        duration: root.fade-in ? 400ms : 0ms;
+        easing: ease-out;
+    }
+    Timer {
+        interval: 16ms;
+        running: !root.started;
+        triggered => { root.started = true; }
+    }
 
     // The date over the greeting, as a header's label.
     if root.data.kind == RowKind.greeting: VerticalLayout {
