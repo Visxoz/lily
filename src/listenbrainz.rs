@@ -55,7 +55,7 @@ impl<'a> Listen<'a> {
                     submission_client: "Lily",
                     submission_client_version: env!("CARGO_PKG_VERSION"),
                     music_service: (!play.local).then_some("music.youtube.com"),
-                    // It refuses a zero length, as a tag under half a second reads.
+                    // Unknown rather than zero, as a tag under half a second reads.
                     duration_ms: play
                         .duration
                         .filter(|&secs| secs > 0)

@@ -102,7 +102,7 @@ Both keep themselves up to date, checking each download against the release's SH
 
 Lily works signed out. Choose **Sign in** in the sidebar, then **Sign in with Google**, and sign in on Google's own page. Home, Library and history become yours, and you can save albums and playlists, subscribe to artists, edit your own playlists, and pin any of them to the top of the sidebar. What you play counts towards your YouTube history unless you turn off **YouTube history** in **Settings ▸ Account**. The sign-in is kept encrypted for your Windows account only. Signing in uses Microsoft Edge WebView2, which comes with Windows 11 and most Windows 10 PCs.
 
-Discord's status and Last.fm scrobbling are in **Settings ▸ Account** too.
+Discord's status and Last.fm and ListenBrainz scrobbling are in **Settings ▸ Account** too.
 
 ## Under the hood
 
@@ -126,7 +126,7 @@ flowchart LR
 
 Most YouTube clients get stream URLs that YouTube's player JavaScript has to unscramble. The visionOS client gets plain ones, so the app asks as that client and needs no JavaScript engine, falling back to Android VR and iOS if YouTube changes it. With Premium, the app unscrambles the web player's URLs itself, in a short-lived QuickJS context with a cut-down copy of the player.
 
-The app talks only to YouTube's hosts, checked against an allowlist, plus GitHub for updates, Apple Music's and Spotify's for moving covers, Better Lyrics' hub, lrc.red, LRCLIB and KuGou (Tencent Music, in China) for lyrics (sent a song's title, artist and length while lyrics are open, and the hub its video ID too; KuGou only when the others have no word timing), and Last.fm if you connect it.
+The app talks only to YouTube's hosts, checked against an allowlist, plus GitHub for updates, Apple Music's and Spotify's for moving covers, Better Lyrics' hub, lrc.red, LRCLIB and KuGou (Tencent Music, in China) for lyrics (sent a song's title, artist and length while lyrics are open, and the hub its video ID too; KuGou only when the others have no word timing), and Last.fm and ListenBrainz if you connect them.
 
 It follows a proxy set by hand in Windows' settings, or one of your own in **Settings ▸ About**, used from Lily's next start, and keeps everything in `%APPDATA%\Lily`.
 
