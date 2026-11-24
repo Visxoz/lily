@@ -9,11 +9,14 @@ use super::{
     Card, CardKind, CardLayout, QueueMode, Section, Track,
     convert::{CARD_THUMB, resize_thumb},
 };
-use parse::{first_page, next_page};
+use parse::{Shelves, first_page, next_page};
 
 /// Continuations fetched at most after the first page; the whole feed is
 /// five or six pages.
 const CONTINUATIONS: usize = 8;
+/// Pages after the first asked for together, the feed's usual rest.
+/// `Feed::next` sends exactly four.
+const AT_ONCE: usize = 4;
 /// The shelves Home shows, in order: those made from the account's own
 /// listening. Titles are in English, rustypipe's language.
 const SHELVES: [&str; 6] = [
@@ -59,6 +62,102 @@ async fn browse(
     }
 }
 
+fn varint(bytes: &[u8], at: &mut usize) -> Option<u64> {
+    let mut value = 0;
+    for shift in (0..64).step_by(7) {
+        let byte = *bytes.get(*at)?;
+        *at += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte < 0x80 {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Where protobuf field `number`'s value lies.
+fn field(bytes: &[u8], number: u64) -> Option<std::ops::Range<usize>> {
+    let mut at = 0;
+    while at < bytes.len() {
+        let key = varint(bytes, &mut at)?;
+        let start = at;
+        let range = match key & 7 {
+            0 => {
+                varint(bytes, &mut at)?;
+                start..at
+            }
+            1 => start..start.checked_add(8)?,
+            2 => {
+                let len = usize::try_from(varint(bytes, &mut at)?).ok()?;
+                at..at.checked_add(len)?
+            }
+            5 => start..start.checked_add(4)?,
+            _ => return None,
+        };
+        if range.end > bytes.len() {
+            return None;
+        }
+        at = range.end;
+        if key >> 3 == number {
+            return Some(range);
+        }
+    }
+    None
+}
+
+/// `text` decoded by the base64 engine that encodes it back exactly.
+fn unbase64(text: &[u8]) -> Option<(Vec<u8>, &'static base64::engine::GeneralPurpose)> {
+    use base64::{Engine as _, engine::general_purpose as gp};
+    [
+        &gp::STANDARD,
+        &gp::STANDARD_NO_PAD,
+        &gp::URL_SAFE,
+        &gp::URL_SAFE_NO_PAD,
+    ]
+    .into_iter()
+    .find_map(|engine| {
+        let bytes = engine.decode(text).ok()?;
+        (engine.encode(&bytes).as_bytes() == text).then_some((bytes, engine))
+    })
+}
+
+/// The first page's continuation token and the next three pages'. YouTube
+/// keeps the feed as a snapshot, and its pages' tokens differ only in the
+/// shelf they start from: field 1 inside field 3 of field 80226972, and that
+/// plus one in field 318126543 inside field 15, each layer base64.
+fn later_tokens(token: &str) -> Option<[String; AT_ONCE]> {
+    use base64::Engine as _;
+    let (outer, outer_b64) = unbase64(token.replace("%3D", "=").as_bytes())?;
+    let browse = field(&outer, 80_226_972)?;
+    let text = field(&outer[browse.clone()], 3)?;
+    let text = browse.start + text.start..browse.start + text.end;
+    let (inner, inner_b64) = unbase64(&outer[text.clone()])?;
+    let first = field(&inner, 1)?;
+    let nested_text = field(&inner, 15)?;
+    let (nested, nested_b64) = unbase64(&inner[nested_text.clone()])?;
+    let next = field(&nested, 318_126_543)?;
+    let value = field(&nested[next.clone()], 1)?;
+    let value = next.start + value.start..next.start + value.end;
+    // The second page starts where the first ended: the page length.
+    let (&[step], &[after]) = (&inner[first.clone()], &nested[value.clone()]) else {
+        return None;
+    };
+    // Bound first, so `step + 1` can't overflow.
+    if step == 0 || usize::from(step) * AT_ONCE + 1 >= 0x80 || after != step + 1 {
+        return None;
+    }
+    let tokens: [String; AT_ONCE] = std::array::from_fn(|page| {
+        let shelf = step * (page as u8 + 1);
+        let (mut outer, mut inner, mut nested) = (outer.clone(), inner.clone(), nested.clone());
+        nested[value.start] = shelf + 1;
+        inner[first.start] = shelf;
+        inner[nested_text.clone()].copy_from_slice(nested_b64.encode(&nested).as_bytes());
+        outer[text.clone()].copy_from_slice(inner_b64.encode(&inner).as_bytes());
+        outer_b64.encode(&outer).replace('=', "%3D")
+    });
+    (tokens[0] == token).then_some(tokens)
+}
+
 /// YouTube orders the shelves differently on every load, so each is held back
 /// until every one above it in `SHELVES` has arrived, and nothing shown moves.
 #[derive(Debug, Clone)]
@@ -94,18 +193,68 @@ impl Feed {
         self.token.is_none()
     }
 
-    /// Reads the next page. Should it fail, the feed ends with what was read.
+    /// Reads the next page, or after the first the next `AT_ONCE` together.
+    /// Should the next fail, the feed ends with what was read.
     pub async fn next(&mut self, q: &RustyPipeQuery) -> Result<(), String> {
         let Some(token) = self.token.take() else {
             return Ok(());
         };
-        let body = serde_json::json!({ "continuation": token });
         let q = q.clone().visitor_data_opt(self.visitor.as_deref());
-        let (more, token) = next_page(&browse(&q, &body, ATTEMPTS).await?)?;
+        let page = |token: String, attempts| {
+            let q = &q;
+            async move {
+                let body = serde_json::json!({ "continuation": token });
+                next_page(&browse(q, &body, attempts).await?)
+            }
+        };
+        // Only the first page's token gives the page length.
+        let tokens = (self.pages_left == CONTINUATIONS)
+            .then(|| later_tokens(&token))
+            .flatten();
+        let Some(tokens) = tokens else {
+            self.add(page(token, ATTEMPTS).await?);
+            return Ok(());
+        };
+        // Made pages retry once: the batch waits for its slowest, and a
+        // failed one is read again later.
+        let [a, b, c, d] = tokens.clone();
+        let (a, b, c, d) = tokio::join!(page(a, ATTEMPTS), page(b, 2), page(c, 2), page(d, 2));
+        self.add_batch(&tokens, [a, b, c, d])
+    }
+
+    /// Adds a batch's pages in order, stopping at one that failed or led
+    /// elsewhere; the rest is then read one by one.
+    fn add_batch(
+        &mut self,
+        tokens: &[String],
+        answers: impl IntoIterator<Item = Shelves>,
+    ) -> Result<(), String> {
+        for (i, answer) in answers.into_iter().enumerate() {
+            match answer {
+                Ok(answer) => self.add(answer),
+                Err(e) if i == 0 => return Err(e),
+                Err(e) => {
+                    log::debug!("a later page of the home feed failed: {e}");
+                    break;
+                }
+            }
+            // Leading nowhere ends the feed; elsewhere, the tokens were wrong.
+            if let Some(next) = tokens.get(i + 1)
+                && self.token.as_ref() != Some(next)
+            {
+                if self.token.is_some() {
+                    log::debug!("the home feed's tokens no longer match the pages made");
+                }
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn add(&mut self, (more, token): (Vec<Section>, Option<String>)) {
         self.held.extend(more);
         self.pages_left -= 1;
         self.token = token.filter(|_| self.pages_left > 0);
-        Ok(())
     }
 
     /// The shelves whose betters in `SHELVES` are all in. Should none come, as
@@ -211,6 +360,123 @@ pub fn add_recent<'a>(sections: &mut Vec<Section>, recent: impl Iterator<Item = 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A first page's token in YouTube's layout.
+    fn feed_token(shelf: u8) -> String {
+        use base64::{Engine as _, engine::general_purpose as gp};
+        fn push_varint(mut v: u64, bytes: &mut Vec<u8>) {
+            while v >= 0x80 {
+                bytes.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            bytes.push(v as u8);
+        }
+        fn len_field(field: u64, value: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            push_varint(field << 3 | 2, &mut bytes);
+            push_varint(value.len() as u64, &mut bytes);
+            bytes.extend_from_slice(value);
+            bytes
+        }
+        // Fields to step over: varint, fixed32, fixed64.
+        let mut nested = vec![
+            0x18, 0xac, 0x02, 0x25, 1, 2, 3, 4, 0x29, 1, 2, 3, 4, 5, 6, 7, 8,
+        ];
+        nested.extend(len_field(11, b"snapshot_a-c"));
+        nested.extend(len_field(318_126_543, &[0x08, shelf + 1]));
+        let mut inner = vec![0x08, shelf];
+        inner.extend(len_field(15, gp::URL_SAFE_NO_PAD.encode(nested).as_bytes()));
+        let mut browse = len_field(2, b"FEmusic_home");
+        browse.extend(len_field(3, gp::STANDARD.encode(inner).as_bytes()));
+        gp::STANDARD
+            .encode(len_field(80_226_972, &browse))
+            .replace('=', "%3D")
+    }
+
+    #[test]
+    fn makes_the_later_pages_tokens() {
+        let token = feed_token(3);
+        assert!(token.ends_with("%3D"), "padded, as YouTube's are");
+        let tokens = later_tokens(&token).expect("laid out as YouTube's");
+        assert_eq!(tokens, [3, 6, 9, 12].map(feed_token));
+        assert_eq!(later_tokens("not a token"), None);
+        // Short of the padding, which is optional.
+        for len in 0..token.len() - "%3D".len() {
+            assert_eq!(later_tokens(&token[..len]), None, "cut at {len}");
+        }
+        assert_eq!(later_tokens(&feed_token(0)), None, "no page length");
+        assert_eq!(later_tokens(&feed_token(40)), None, "past one byte");
+    }
+
+    #[test]
+    fn adds_a_batch_up_to_where_it_goes_wrong() {
+        let tokens = ["t1", "t2", "t3", "t4"].map(str::to_owned);
+        let page = |title: &str, next: Option<&str>| -> Shelves {
+            Ok((vec![shelf(title, &[title])], next.map(str::to_owned)))
+        };
+        let read = |answers: [Shelves; 4]| {
+            let mut feed = feed(Vec::new());
+            // As `next` leaves it.
+            feed.pages_left = CONTINUATIONS;
+            feed.token = None;
+            let ok = feed.add_batch(&tokens, answers).is_ok();
+            let held = titles(&feed.held).join(" ");
+            (ok, held, feed.token, CONTINUATIONS - feed.pages_left)
+        };
+        let token = |t: &str| Some(t.to_owned());
+
+        let all = [
+            page("a", Some("t2")),
+            page("b", Some("t3")),
+            page("c", Some("t4")),
+            page("d", Some("t5")),
+        ];
+        assert_eq!(
+            read(all),
+            (true, "a b c d".into(), token("t5"), 4),
+            "read on from the last"
+        );
+
+        let ended = [
+            page("a", Some("t2")),
+            page("b", None),
+            page("", None),
+            page("", None),
+        ];
+        assert_eq!(read(ended), (true, "a b".into(), None, 2), "the feed ended");
+
+        let failed = [
+            page("a", Some("t2")),
+            page("b", Some("t3")),
+            Err("refused".to_owned()),
+            page("d", None),
+        ];
+        assert_eq!(
+            read(failed),
+            (true, "a b".into(), token("t3"), 2),
+            "the failed page read again"
+        );
+
+        let elsewhere = [
+            page("a", Some("other")),
+            page("wrong", Some("t3")),
+            page("wrong", Some("t4")),
+            page("wrong", None),
+        ];
+        assert_eq!(
+            read(elsewhere),
+            (true, "a".into(), token("other"), 1),
+            "made tokens that lead elsewhere are dropped"
+        );
+
+        let first_failed = [
+            Err("refused".to_owned()),
+            page("b", Some("t3")),
+            page("c", Some("t4")),
+            page("d", None),
+        ];
+        assert_eq!(read(first_failed), (false, String::new(), None, 0));
+    }
 
     #[test]
     fn retries_only_refusals() {

@@ -455,7 +455,7 @@ impl SectionList {
 }
 
 /// A page's shelves and the continuation token of the next page.
-type Shelves = Result<(Vec<Section>, Option<String>), String>;
+pub(super) type Shelves = Result<(Vec<Section>, Option<String>), String>;
 
 pub(super) fn first_page(json: &str) -> Shelves {
     let response: Response = serde_json::from_str(json).map_err(|e| e.to_string())?;
