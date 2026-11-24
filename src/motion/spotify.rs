@@ -317,7 +317,7 @@ impl Spotify {
     }
 
     fn load(&self) -> Option<Config> {
-        serde_json::from_slice(&std::fs::read(&self.config_file).ok()?).ok()
+        crate::settings::read_json(&self.config_file)
     }
 
     /// The script's config, without downloading it again while the page
@@ -351,12 +351,7 @@ impl Spotify {
         if let Some(dir) = self.config_file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let saved = serde_json::to_vec(&config)
-            .map_err(std::io::Error::other)
-            .and_then(|json| crate::settings::write_atomic(&self.config_file, &json));
-        if let Err(e) = saved {
-            log::warn!("couldn't save Spotify's player config: {e}");
-        }
+        crate::settings::save_json(&self.config_file, &config, "Spotify's player config");
         Ok(config)
     }
 }
@@ -377,7 +372,9 @@ async fn fetch(
     if !status.is_success() {
         return Err(Fail::Status(status.as_u16(), what));
     }
-    super::body(response, limit).await.map_err(unreachable)
+    crate::http::body(response, limit)
+        .await
+        .map_err(unreachable)
 }
 
 /// A token for the cookie, or an anonymous one without.

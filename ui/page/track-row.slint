@@ -2,7 +2,7 @@ import { Icons, Theme } from "../theme.slint";
 import { Api, TrackItem } from "../types.slint";
 import { Art } from "../widgets/art.slint";
 import { Icon } from "../widgets/buttons.slint";
-import { MenuDivider, MenuEntry, PopupMenu } from "../widgets/menu.slint";
+import { MenuDivider, MenuEntry, PopupMenu, SongAccountEntries } from "../widgets/menu.slint";
 import { Equalizer } from "../widgets/spinner.slint";
 
 export component Link inherits Text {
@@ -119,32 +119,9 @@ export component TrackRow inherits Rectangle {
             }
         }
 
-        if root.youtube: MenuDivider { }
-
-        if root.youtube: MenuEntry {
-            text: Api.rating-of(root.track.id) == 1 ? "Remove from liked songs" : "Like";
-            icon: Api.rating-of(root.track.id) == 1 ? Icons.thumb-up-filled : Icons.thumb-up;
-            active: Api.rating-of(root.track.id) == 1;
-            activated => { Api.rate(root.track.id, 1); }
-        }
-
-        if root.youtube: MenuEntry {
-            text: Api.rating-of(root.track.id) == 2 ? "Remove dislike" : "Dislike";
-            icon: Api.rating-of(root.track.id) == 2 ? Icons.thumb-down-filled : Icons.thumb-down;
-            active: Api.rating-of(root.track.id) == 2;
-            activated => { Api.rate(root.track.id, 2); }
-        }
-
-        if root.youtube && root.track.id != Api.playing-id: MenuEntry {
-            text: "Remove rating";
-            icon: Icons.close;
-            activated => { Api.rate(root.track.id, 0); }
-        }
-
-        if root.youtube: MenuEntry {
-            text: "Save to playlist";
-            icon: Icons.save-to-playlist;
-            activated => { Api.save-to-playlist(root.track.id); }
+        if root.youtube: SongAccountEntries {
+            song: root.track.id;
+            can-clear-rating: root.track.id != Api.playing-id;
         }
 
         if Api.own-playlist && root.section == 0: MenuEntry {

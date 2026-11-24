@@ -53,18 +53,12 @@ pub(in crate::api) async fn timed(browse_id: &str) -> Result<Option<Lyrics>, Str
         }},
         "browseId": browse_id,
     });
-    let text = crate::http::client()
+    let request = crate::http::client()
         .post(BROWSE_URL)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| e.to_string())?
-        .text()
-        .await
-        .map_err(|e| e.to_string())?;
+        .body(body.to_string());
+    let text = crate::http::text(request, "the Android app's request").await?;
     Ok(parse(&text))
 }
 

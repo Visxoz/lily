@@ -9,6 +9,7 @@ use std::{
         Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, SystemTime},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -91,6 +92,46 @@ pub(crate) fn save_json(path: &Path, value: &impl Serialize, what: &str) -> bool
         log::warn!("could not save {what}: {e}");
     }
     written.is_ok()
+}
+
+/// Deletes the files in `dir` that `counts` takes, first any last changed
+/// over `max_age` ago, then the oldest until the rest fit `budget`; never
+/// `keep`, which still counts toward the budget.
+pub fn prune(
+    dir: &Path,
+    budget: u64,
+    max_age: Option<Duration>,
+    keep: Option<&Path>,
+    counts: impl Fn(&Path) -> bool,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(SystemTime, u64, PathBuf)> = entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let path = e.path();
+            if !counts(&path) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            Some((meta.modified().ok()?, meta.len(), path))
+        })
+        .collect();
+    files.sort_unstable_by_key(|(modified, ..)| *modified);
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    let now = SystemTime::now();
+    for (modified, size, path) in files {
+        let old =
+            max_age.is_some_and(|max| now.duration_since(modified).is_ok_and(|age| age > max));
+        if !old && total <= budget {
+            // Sorted oldest first, so none after is old either.
+            break;
+        }
+        if Some(path.as_path()) != keep && std::fs::remove_file(&path).is_ok() {
+            total -= size;
+        }
+    }
 }
 
 /// Numbers one file's saves, which run off the UI thread and can finish

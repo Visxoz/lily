@@ -1,4 +1,5 @@
-import { Theme } from "../theme.slint";
+import { Icons, Theme } from "../theme.slint";
+import { Api } from "../types.slint";
 import { Icon } from "buttons.slint";
 
 /// Lily's own context menu, drawn like the search dropdown rather than as the
@@ -70,5 +71,40 @@ export component MenuDivider {
         width: parent.width - 12px;
         height: 1px;
         background: Theme.divider;
+    }
+}
+
+/// A song menu's YouTube entries: rating the song and saving it to a playlist.
+export component SongAccountEntries inherits VerticalLayout {
+    in property <string> song;
+    /// Off for the song playing.
+    in property <bool> can-clear-rating: true;
+
+    MenuDivider { }
+
+    MenuEntry {
+        text: Api.rating-of(root.song) == 1 ? "Remove from liked songs" : "Like";
+        icon: Api.rating-of(root.song) == 1 ? Icons.thumb-up-filled : Icons.thumb-up;
+        active: Api.rating-of(root.song) == 1;
+        activated => { Api.rate(root.song, 1); }
+    }
+
+    MenuEntry {
+        text: Api.rating-of(root.song) == 2 ? "Remove dislike" : "Dislike";
+        icon: Api.rating-of(root.song) == 2 ? Icons.thumb-down-filled : Icons.thumb-down;
+        active: Api.rating-of(root.song) == 2;
+        activated => { Api.rate(root.song, 2); }
+    }
+
+    if root.can-clear-rating: MenuEntry {
+        text: "Remove rating";
+        icon: Icons.close;
+        activated => { Api.rate(root.song, 0); }
+    }
+
+    MenuEntry {
+        text: "Save to playlist";
+        icon: Icons.save-to-playlist;
+        activated => { Api.save-to-playlist(root.song); }
     }
 }

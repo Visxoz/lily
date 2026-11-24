@@ -15,8 +15,6 @@ pub use head::warm;
 use response::parse;
 pub(crate) use response::{Format, PlayerResponse, best_audio, parse_response};
 
-const PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
-
 /// A client YouTube hands plain URLs to, as yt-dlp describes it.
 struct Client {
     name: &'static str,
@@ -192,27 +190,37 @@ async fn resolve_with(
         "contentCheckOk": true,
         "racyCheckOk": true,
     });
-    let text = crate::http::client()
-        .post(PLAYER_URL)
-        .header(reqwest::header::USER_AGENT, client.user_agent)
-        .header("Content-Type", "application/json")
-        .header("Origin", "https://www.youtube.com")
-        .header("X-YouTube-Client-Name", client.id)
-        .header("X-YouTube-Client-Version", client.version)
-        .header("X-Goog-Visitor-Id", visitor_data)
-        .body(body.to_string())
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("player request failed: {}", e.without_url()))?
-        .text()
-        .await
-        .map_err(|e| format!("player request failed: {}", e.without_url()))?;
+    let request = player_post(
+        "https://www.youtube.com",
+        client.user_agent,
+        (client.id, client.version),
+        visitor_data,
+    )
+    .body(body.to_string());
+    let text = crate::http::text(request, "player request failed").await?;
     let stream = parse(&text, client.user_agent, max_kbps, itag)?;
     Ok(ResolvedStream {
         client: Some(client.name),
         ..stream
     })
+}
+
+/// A player request from `origin` as the client numbered and versioned by
+/// `client`, as innertube wants it.
+fn player_post(
+    origin: &str,
+    user_agent: &str,
+    (id, version): (&str, &str),
+    visitor_data: &str,
+) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .post(format!("{origin}/youtubei/v1/player?prettyPrint=false"))
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .header("Content-Type", "application/json")
+        .header("Origin", origin)
+        .header("X-YouTube-Client-Name", id)
+        .header("X-YouTube-Client-Version", version)
+        .header("X-Goog-Visitor-Id", visitor_data)
 }
 
 #[cfg(test)]

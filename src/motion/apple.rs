@@ -99,9 +99,10 @@ impl Apple {
                 continue;
             }
             if response.status() != reqwest::StatusCode::UNAUTHORIZED {
-                let body = super::body(response.error_for_status().map_err(failed)?, ANSWER_LIMIT)
-                    .await
-                    .map_err(|e| format!("Apple Music's search failed: {e}"))?;
+                let body =
+                    crate::http::body(response.error_for_status().map_err(failed)?, ANSWER_LIMIT)
+                        .await
+                        .map_err(|e| format!("Apple Music's search failed: {e}"))?;
                 let answer: Value = serde_json::from_slice(&body)
                     .map_err(|_| "Apple Music's search answer isn't JSON.".to_owned())?;
                 let albums = answer
@@ -252,7 +253,7 @@ async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response, S
 
 /// The URL's body as text.
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    let body = super::body(get(client, url).await?, ANSWER_LIMIT)
+    let body = crate::http::body(get(client, url).await?, ANSWER_LIMIT)
         .await
         .map_err(|e| format!("A motion cover's answer failed: {e}"))?;
     Ok(String::from_utf8(body)

@@ -82,33 +82,15 @@ pub fn write(path: &Path, text: &str) -> io::Result<()> {
     crate::settings::write_atomic(path, &data)
 }
 
-/// Reads `path`, or failing that the plain-text `legacy` file an older
-/// version wrote, which is then encrypted and removed.
-fn read_migrating(path: &Path, legacy: &Path) -> Option<String> {
-    if let Some(text) = read(path) {
-        return Some(text);
-    }
-    let text = std::fs::read_to_string(legacy).ok()?;
-    match write(path, &text) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(legacy);
-        }
-        Err(e) => log::warn!("could not encrypt {}: {e}", legacy.display()),
-    }
-    Some(text)
-}
-
 /// rustypipe's cache, which holds the sign-in cookie.
 pub struct EncryptedStorage {
     path: PathBuf,
-    legacy: PathBuf,
 }
 
 impl EncryptedStorage {
     pub fn new(dir: &Path) -> Self {
         Self {
             path: dir.join("rustypipe_cache.bin"),
-            legacy: dir.join("rustypipe_cache.json"),
         }
     }
 }
@@ -121,7 +103,7 @@ impl rustypipe::cache::CacheStorage for EncryptedStorage {
     }
 
     fn read(&self) -> Option<String> {
-        read_migrating(&self.path, &self.legacy)
+        read(&self.path)
     }
 }
 
@@ -130,17 +112,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trips_and_migrates() {
+    fn round_trips_encrypted() {
         let dir = std::env::temp_dir().join(format!("ytm-secret-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let (path, legacy) = (dir.join("s.bin"), dir.join("s.txt"));
+        let path = dir.join("s.bin");
 
-        std::fs::write(&legacy, "SID=a; HSID=b").unwrap();
-        assert_eq!(
-            read_migrating(&path, &legacy).as_deref(),
-            Some("SID=a; HSID=b")
-        );
-        assert!(!legacy.exists(), "the plain-text file is removed");
+        write(&path, "SID=a; HSID=b").unwrap();
         let stored = std::fs::read(&path).unwrap();
         assert!(
             !stored.windows(5).any(|w| w == b"SID=a"),

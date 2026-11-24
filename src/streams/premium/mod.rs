@@ -137,15 +137,13 @@ async fn player_request(
         "contentCheckOk": true,
         "racyCheckOk": true,
     });
-    let mut request = crate::http::client()
-        .post(format!("{origin}/youtubei/v1/player?prettyPrint=false"))
-        .header(reqwest::header::USER_AGENT, WEB_USER_AGENT)
-        .header("Content-Type", "application/json")
-        .header("Origin", &origin)
-        .header("X-Origin", &origin)
-        .header("X-YouTube-Client-Name", client.id)
-        .header("X-YouTube-Client-Version", client.version)
-        .header("X-Goog-Visitor-Id", visitor_data);
+    let mut request = streams::player_post(
+        &origin,
+        WEB_USER_AGENT,
+        (client.id, client.version),
+        visitor_data,
+    )
+    .header("X-Origin", &origin);
     if let Some(cookie) = cookie {
         request = request
             .header("Cookie", cookie)
@@ -154,15 +152,8 @@ async fn player_request(
             request = request.header("Authorization", auth);
         }
     }
-    let text = request
-        .body(body.to_string())
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("{} player request failed: {}", client.name, e.without_url()))?
-        .text()
-        .await
-        .map_err(|e| format!("{} player request failed: {}", client.name, e.without_url()))?;
+    let failed = format!("{} player request failed", client.name);
+    let text = crate::http::text(request.body(body.to_string()), &failed).await?;
     streams::parse_response(&text)
 }
 

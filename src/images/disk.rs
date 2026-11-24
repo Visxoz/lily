@@ -7,7 +7,7 @@ use std::{
         OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use sha1::{Digest, Sha1};
@@ -45,32 +45,14 @@ pub fn prune_disk() {
     prune(disk_dir(), DISK_BUDGET, DISK_MAX_AGE);
 }
 
-/// Deletes kept artwork older than `max_age`, then the oldest past `budget`.
 fn prune(dir: &Path, budget: u64, max_age: Duration) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let now = SystemTime::now();
-    let mut files: Vec<_> = entries
-        .filter_map(|e| {
-            let e = e.ok()?;
-            let meta = e.metadata().ok()?;
-            Some((meta.modified().ok()?, meta.len(), e.path()))
-        })
-        .collect();
-    files.sort_unstable_by_key(|f| std::cmp::Reverse(f.0));
-    let mut kept = 0;
-    for (modified, len, path) in files {
-        kept += len;
-        let old = now.duration_since(modified).is_ok_and(|age| age > max_age);
-        if old || kept > budget {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    crate::settings::prune(dir, budget, Some(max_age), None, |_| true);
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
 
     #[test]

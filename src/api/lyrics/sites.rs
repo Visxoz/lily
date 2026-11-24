@@ -29,23 +29,11 @@ async fn get(host: &str, path: &str, query: &[(&str, &str)]) -> Option<Vec<u8>> 
 
 /// The body of a successful answer, read up to `MAX_BODY`.
 pub(super) async fn read(response: reqwest::Response) -> Option<Vec<u8>> {
-    let mut response = response
+    let response = response
         .error_for_status()
         .map_err(|e| log::debug!("lyrics: {e}"))
         .ok()?;
-    // One said to be too large isn't downloaded at all.
-    let length = response.content_length().unwrap_or(0);
-    if length > MAX_BODY as u64 {
-        return None;
-    }
-    let mut body = Vec::with_capacity(length as usize);
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if body.len() + chunk.len() > MAX_BODY {
-            return None;
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Some(body)
+    crate::http::body(response, MAX_BODY).await.ok()
 }
 
 #[derive(Deserialize)]

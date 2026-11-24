@@ -280,26 +280,43 @@ const MOTION_HOSTS: &[&str] = &[
     "canvaz.scdn.co",
 ];
 
-/// Every URL from Apple's and Spotify's answers is checked with this.
-pub fn motion_allowed(url: &Url) -> bool {
-    url.scheme() == "https"
-        && url
-            .host_str()
-            .is_some_and(|host| MOTION_HOSTS.contains(&host))
+/// HTTPS on exactly one of `hosts`.
+fn on_host(url: &Url, hosts: &[&str]) -> bool {
+    url.scheme() == "https" && url.host_str().is_some_and(|host| hosts.contains(&host))
 }
 
-/// For animated artwork: a read timeout rather than a whole one, as scripts
-/// and clips run to megabytes.
+/// Every URL from Apple's and Spotify's answers is checked with this.
+pub fn motion_allowed(url: &Url) -> bool {
+    on_host(url, MOTION_HOSTS)
+}
+
+/// For sites besides YouTube: read timeouts rather than a whole one, as
+/// their answers stream in or run to megabytes, and redirects kept to `hosts`.
+fn site_client(
+    user_agent: &str,
+    connect: Duration,
+    read: Duration,
+    hosts: &'static [&'static str],
+) -> reqwest::Client {
+    proxied(keep_alive(reqwest::Client::builder()))
+        .user_agent(user_agent)
+        .connect_timeout(connect)
+        .read_timeout(read)
+        .redirect(redirects_if(move |url| on_host(url, hosts)))
+        .build()
+        .expect("HTTP client builds")
+}
+
+/// For animated artwork, whose scripts and clips run to megabytes.
 pub fn motion_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        proxied(keep_alive(reqwest::Client::builder()))
-            .user_agent(crate::streams::premium::WEB_USER_AGENT)
-            .connect_timeout(Duration::from_secs(15))
-            .read_timeout(Duration::from_secs(20))
-            .redirect(redirects_if(motion_allowed))
-            .build()
-            .expect("HTTP client builds")
+        site_client(
+            crate::streams::premium::WEB_USER_AGENT,
+            Duration::from_secs(15),
+            Duration::from_secs(20),
+            MOTION_HOSTS,
+        )
     })
 }
 
@@ -313,27 +330,72 @@ const LYRICS_HOSTS: &[&str] = &[
     "krcs.kugou.com",
 ];
 
-fn lyrics_allowed(url: &Url) -> bool {
-    url.scheme() == "https"
-        && url
-            .host_str()
-            .is_some_and(|host| LYRICS_HOSTS.contains(&host))
-}
-
-/// For lyrics sites: a read timeout rather than a whole one, as the hub's
-/// answer streams in site by site, and a short one, as lyrics wait on them.
+/// For lyrics sites, whose hub answer streams in site by site; short, as
+/// lyrics wait on them.
 pub fn lyrics_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        proxied(keep_alive(reqwest::Client::builder()))
+        site_client(
             // LRCLIB asks clients to name themselves.
-            .user_agent(concat!("Lily/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(4))
-            .read_timeout(Duration::from_secs(4))
-            .redirect(redirects_if(lyrics_allowed))
-            .build()
-            .expect("HTTP client builds")
+            concat!("Lily/", env!("CARGO_PKG_VERSION")),
+            Duration::from_secs(4),
+            Duration::from_secs(4),
+            LYRICS_HOSTS,
+        )
     })
+}
+
+/// Sends `request` and reads its answer as text, failing on an error status.
+/// Errors start with `what` and leave out the URL, as premium.log keeps none.
+pub async fn text(request: reqwest::RequestBuilder, what: &str) -> Result<String, String> {
+    let fail = |e: reqwest::Error| format!("{what}: {}", e.without_url());
+    request
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(fail)?
+        .text()
+        .await
+        .map_err(fail)
+}
+
+/// A response's body, refused past `limit` bytes so a hostile answer can't
+/// fill the memory.
+pub async fn body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+    let expected = response.content_length().unwrap_or(0).min(limit as u64);
+    let mut bytes = Vec::with_capacity(expected as usize);
+    each_chunk(response, limit, |chunk| {
+        bytes.extend_from_slice(chunk);
+        Ok(())
+    })
+    .await?;
+    Ok(bytes)
+}
+
+/// Hands `take` the body a chunk at a time, failing past `limit` bytes; one
+/// said to be larger isn't downloaded at all.
+pub async fn each_chunk(
+    mut response: reqwest::Response,
+    limit: usize,
+    mut take: impl FnMut(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    const TOO_LARGE: &str = "the answer was far too large";
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err(TOO_LARGE.to_owned());
+    }
+    let mut total = 0;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| e.without_url().to_string())?
+    {
+        total += chunk.len();
+        if total > limit {
+            return Err(TOO_LARGE.to_owned());
+        }
+        take(&chunk)?;
+    }
+    Ok(())
 }
 
 /// For the audio download thread. No compression, as byte ranges must be the
@@ -377,7 +439,7 @@ mod tests {
 
     #[test]
     fn lyrics_keep_to_their_sites() {
-        let allowed = |url: &str| lyrics_allowed(&Url::parse(url).unwrap());
+        let allowed = |url: &str| on_host(&Url::parse(url).unwrap(), LYRICS_HOSTS);
         assert!(allowed("https://lrclib.net/api/get"));
         assert!(allowed("https://lyrics.api.dacubeking.com/v2/lyrics"));
         assert!(!allowed("http://lrclib.net/"), "plain HTTP");

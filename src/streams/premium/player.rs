@@ -53,17 +53,10 @@ fn signature_timestamp(player: &str) -> Option<u32> {
 }
 
 async fn text(url: &str) -> Result<String, String> {
-    crate::http::client()
+    let request = crate::http::client()
         .get(url)
-        .header(reqwest::header::USER_AGENT, WEB_USER_AGENT)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        // Without the URL, as premium.log keeps none.
-        .map_err(|e| format!("could not fetch the player: {}", e.without_url()))?
-        .text()
-        .await
-        .map_err(|e| e.without_url().to_string())
+        .header(reqwest::header::USER_AGENT, WEB_USER_AGENT);
+    crate::http::text(request, "could not fetch the player").await
 }
 
 /// YouTube's current player version.

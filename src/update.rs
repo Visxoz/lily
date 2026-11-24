@@ -154,15 +154,11 @@ fn expected_hash(sums: &str, name: &str) -> Option<String> {
 /// `progress` gets the fraction done.
 pub async fn download(update: &Update, progress: impl Fn(f32)) -> Result<PathBuf, String> {
     let fail = |e: reqwest::Error| format!("the download failed: {e}");
-    let sums = client()
-        .get(&update.sums.browser_download_url)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(fail)?
-        .text()
-        .await
-        .map_err(fail)?;
+    let sums = crate::http::text(
+        client().get(&update.sums.browser_download_url),
+        "the download failed",
+    )
+    .await?;
     let expected =
         expected_hash(&sums, &update.asset.name).ok_or("the release has no checksum for it")?;
 

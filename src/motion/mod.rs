@@ -215,7 +215,7 @@ impl Motion {
         std::fs::create_dir_all(&self.dir).map_err(keep_failed)?;
         let partial = path.with_extension(format!("{}.part", NEXT.fetch_add(1, Ordering::Relaxed)));
         let mut file = std::fs::File::create(&partial).map_err(keep_failed)?;
-        let written = each_chunk(response, CLIP_LIMIT, |chunk| {
+        let written = crate::http::each_chunk(response, CLIP_LIMIT, |chunk| {
             file.write_all(chunk).map_err(|e| e.to_string())
         })
         .await
@@ -230,44 +230,6 @@ impl Motion {
         prune(&self.dir, path, DISK_BUDGET);
         Ok(())
     }
-}
-
-/// A response's body, refused past `limit` bytes so a hostile answer can't
-/// fill the memory.
-pub(super) async fn body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
-    let expected = response.content_length().unwrap_or(0).min(limit as u64);
-    let mut bytes = Vec::with_capacity(expected as usize);
-    each_chunk(response, limit, |chunk| {
-        bytes.extend_from_slice(chunk);
-        Ok(())
-    })
-    .await?;
-    Ok(bytes)
-}
-
-/// Hands `take` the body a chunk at a time, failing past `limit` bytes.
-async fn each_chunk(
-    mut response: reqwest::Response,
-    limit: usize,
-    mut take: impl FnMut(&[u8]) -> Result<(), String>,
-) -> Result<(), String> {
-    const TOO_LARGE: &str = "the answer was far too large";
-    if response.content_length().is_some_and(|n| n > limit as u64) {
-        return Err(TOO_LARGE.to_owned());
-    }
-    let mut total = 0;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| e.without_url().to_string())?
-    {
-        total += chunk.len();
-        if total > limit {
-            return Err(TOO_LARGE.to_owned());
-        }
-        take(&chunk)?;
-    }
-    Ok(())
 }
 
 const CANVAS: &str = "canvas ";
@@ -299,33 +261,9 @@ fn touch(path: &Path) -> bool {
 /// one just kept. A `.part` counts too, so one a crash left behind goes in
 /// turn; one being written is the newest, so it never does.
 fn prune(dir: &Path, kept: &Path, budget: u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut clips: Vec<(SystemTime, u64, PathBuf)> = entries
-        .filter_map(|e| {
-            let e = e.ok()?;
-            let path = e.path();
-            if !path.extension().is_some_and(|x| x == "mp4" || x == "part") {
-                return None;
-            }
-            let meta = e.metadata().ok()?;
-            Some((meta.modified().ok()?, meta.len(), path))
-        })
-        .collect();
-    let mut total: u64 = clips.iter().map(|(_, size, _)| size).sum();
-    if total <= budget {
-        return;
-    }
-    clips.sort_unstable_by_key(|(used, ..)| *used);
-    for (_, size, path) in clips {
-        if total <= budget {
-            break;
-        }
-        if path != kept && std::fs::remove_file(&path).is_ok() {
-            total -= size;
-        }
-    }
+    crate::settings::prune(dir, budget, None, Some(kept), |path| {
+        path.extension().is_some_and(|x| x == "mp4" || x == "part")
+    });
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ pub use account::{
     save_visitor,
 };
 pub use files::{
-    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, remove_old_cookie, write_atomic,
+    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, write_atomic,
     write_atomic_parts,
 };
 pub(crate) use files::{read_json, save_json};
@@ -189,9 +189,6 @@ pub struct Settings {
     pub repeat: i32,
     pub sidebar_collapsed: bool,
     pub quality: Quality,
-    /// Older versions' form of `quality`'s High, kept in step for them; only
-    /// `load` reads it here.
-    pub premium_audio: bool,
     /// The signed-in account has been served Premium formats, so songs
     /// without them, such as music videos, never mark it as not Premium.
     pub premium_account: bool,
@@ -304,7 +301,6 @@ impl Default for Settings {
             repeat: 0,
             sidebar_collapsed: false,
             quality: Quality::High,
-            premium_audio: true,
             premium_account: false,
             no_premium: false,
             crossfade: false,
@@ -338,10 +334,6 @@ impl Settings {
         let mut settings = std::fs::read(settings_path())
             .map(|json| Self::parse(&json))
             .unwrap_or_default();
-        // Premium audio turned off by an older version means Normal.
-        if !settings.premium_audio && settings.quality == Quality::High {
-            settings.quality = Quality::Normal;
-        }
         // The app divides by it, so it must agree with the player's.
         settings.speed = settings
             .speed
@@ -357,13 +349,17 @@ impl Settings {
     /// edit, or a choice added by a newer version) goes back to its default
     /// alone rather than taking an opt-out such as `youtube_history` with it.
     fn parse(json: &[u8]) -> Self {
-        let file = match serde_json::from_slice(json) {
+        let mut file = match serde_json::from_slice(json) {
             Ok(serde_json::Value::Object(file)) => file,
             _ => {
                 log::warn!("settings.json could not be read; using the defaults");
                 return Self::default();
             }
         };
+        // Before 0.1.5 there was only a Premium audio switch, whose off is Normal.
+        if !file.contains_key("quality") && file.get("premium_audio") == Some(&false.into()) {
+            file.insert("quality".into(), "normal".into());
+        }
         let mut kept = serde_json::Map::new();
         for (key, value) in file {
             kept.insert(key.clone(), value);
@@ -377,7 +373,6 @@ impl Settings {
 
     pub fn set_quality(&mut self, quality: Quality) {
         self.quality = quality;
-        self.premium_audio = quality == Quality::High;
     }
 
     pub fn equaliser(&self) -> Option<crate::audio::eq::Gains> {
@@ -475,12 +470,15 @@ mod tests {
     }
 
     #[test]
-    fn quality_and_premium_audio_agree() {
-        let mut settings = Settings::default();
-        settings.set_quality(Quality::Low);
-        assert!(!settings.premium_audio);
-        settings.set_quality(Quality::High);
-        assert!(settings.premium_audio);
+    fn reads_quality_from_older_versions() {
+        let quality = |json: &str| Settings::parse(json.as_bytes()).quality;
+        assert_eq!(quality(r#"{"premium_audio":false}"#), Quality::Normal);
+        assert_eq!(quality(r#"{"premium_audio":true}"#), Quality::High);
+        assert_eq!(
+            quality(r#"{"premium_audio":false,"quality":"high"}"#),
+            Quality::High,
+            "a later version's own choice"
+        );
         assert_eq!(
             Quality::from_index(Quality::Normal.index()),
             Quality::Normal
