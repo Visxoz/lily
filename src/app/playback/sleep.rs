@@ -1,44 +1,42 @@
-//! The sleep timer: pauses after a number of minutes, or once the song
-//! playing ends.
+//! Sleep timer: pauses after some minutes or at the song's end.
 
 use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
 
-use slint::{ComponentHandle, SharedString};
+use slint::SharedString;
 
-use crate::{Api as ApiGlobal, app::App};
+use crate::app::App;
 
 /// What the player bar sends for "End of song"; 0 turns the timer off.
 const END_OF_SONG: i32 = -1;
 const PAUSED: &str = "Paused by the sleep timer";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(in crate::app) enum Sleep {
     At(Instant),
     EndOfSong,
 }
 
 impl App {
-    /// Sets the timer to `minutes` from now, `END_OF_SONG`, or off for 0.
     pub(in crate::app) fn set_sleep(&self, minutes: i32) {
         let sleep = match minutes {
             END_OF_SONG => Some(Sleep::EndOfSong),
             1.. => Some(Sleep::At(
-                Instant::now() + Duration::from_mins(u64::from(minutes.unsigned_abs())),
+                Instant::now() + Duration::from_mins(minutes as u64),
             )),
             _ => None,
         };
         self.state.borrow_mut().sleep = sleep;
-        if matches!(sleep, Some(Sleep::EndOfSong)) {
-            // The song must end rather than run into the next.
+        if sleep == Some(Sleep::EndOfSong) {
+            // Let the song end rather than run on.
             self.unqueue_next();
         }
         self.show_sleep(if sleep.is_some() { minutes } else { 0 });
     }
 
-    /// Runs every tick: counts the minutes down and pauses at the end.
+    /// Every tick: shows the minutes left, pausing once due.
     pub(in crate::app) fn check_sleep(self: &Rc<Self>) {
         let Some(Sleep::At(at)) = self.state.borrow().sleep else {
             return;
@@ -48,29 +46,26 @@ impl App {
             self.show_sleep(minutes_left(left));
             return;
         }
-        self.state.borrow_mut().sleep = None;
-        self.show_sleep(0);
-        if self.ui().global::<ApiGlobal>().get_is_playing() {
+        self.set_sleep(0);
+        if !self.player.is_paused() && !self.stopped() {
             self.set_paused(true);
             self.toast(PAUSED);
         }
     }
 
-    /// At a song's end, whether the timer was waiting for it. It then stops,
-    /// showing the next song for Play to start.
+    /// Whether it stopped at the song's end, showing the next song for Play.
     pub(in crate::app) fn sleep_at_end(self: &Rc<Self>) -> bool {
-        if !matches!(self.state.borrow().sleep, Some(Sleep::EndOfSong)) {
+        if self.state.borrow().sleep != Some(Sleep::EndOfSong) {
             return false;
         }
-        self.state.borrow_mut().sleep = None;
-        self.show_sleep(0);
+        self.set_sleep(0);
         self.stop();
         let next = self.state.borrow_mut().queue.advance(false).cloned();
         if let Some(track) = next {
             self.state.borrow_mut().playback.duration = track.seconds();
             self.present(&track, 0.0);
             self.show_playing(false);
-            // Its stream's quality shows once it plays.
+            // Unknown until it plays.
             let ui = self.ui();
             ui.set_np_quality(SharedString::new());
             ui.set_np_premium(false);

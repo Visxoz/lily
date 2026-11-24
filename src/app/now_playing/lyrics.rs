@@ -178,7 +178,14 @@ impl App {
         } else {
             &[]
         };
-        let extra = |lines: &[String], i: usize| lines.get(i).map(Into::into).unwrap_or_default();
+        // Skips the empty ones, as a `SharedString` of "" still allocates.
+        let extra = |lines: &[String], i: usize| {
+            lines
+                .get(i)
+                .filter(|text| !text.is_empty())
+                .map(Into::into)
+                .unwrap_or_default()
+        };
         let lines = lyrics.lines.iter().enumerate().map(|(i, text)| LyricLine {
             text: text.into(),
             translation: extra(&lyrics.translations, i),

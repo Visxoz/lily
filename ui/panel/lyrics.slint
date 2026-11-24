@@ -17,8 +17,7 @@ export struct LyricLine {
     romanised: string,
 }
 
-/// Whether the lyrics shown have translations and romanisations, and which
-/// the user shows beneath each line.
+/// Which extras the lyrics have, and which are shown.
 export global LyricsExtras {
     in property <bool> has-translation;
     in property <bool> has-romanisation;
@@ -28,7 +27,7 @@ export global LyricsExtras {
     callback set-romanise(on: bool);
 }
 
-/// Above the lyrics rather than in them, so they don't scroll away.
+/// Outside the Flickable, so they don't scroll away.
 export component LyricsToggles inherits HorizontalLayout {
     if LyricsExtras.has-translation || LyricsExtras.has-romanisation: HorizontalLayout {
         padding-left: 24px;
@@ -145,8 +144,7 @@ export component Lyrics inherits Flickable {
         root.content-y = root.centred();
     }
 
-    /// Keeps the current line centred as rows change height, as the extras
-    /// shown or hidden do; a glide is aimed at its new place instead.
+    /// Keeps the current line centred as rows resize; mid-glide, retargets it.
     function follow(y: length, height: length) {
         if root.gliding {
             root.line-y = y;

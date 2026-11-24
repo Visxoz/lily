@@ -55,7 +55,7 @@ impl<'a> Listen<'a> {
                     submission_client: "Lily",
                     submission_client_version: env!("CARGO_PKG_VERSION"),
                     music_service: (!play.local).then_some("music.youtube.com"),
-                    // Unknown rather than zero, as a tag under half a second reads.
+                    // Left out at 0 s, which a sub-second tag rounds to.
                     duration_ms: play
                         .duration
                         .filter(|&secs| secs > 0)
@@ -122,7 +122,7 @@ pub async fn validate(token: String) -> Result<Session, Error> {
         #[serde(default)]
         user_name: String,
     }
-    // Tokens are UUIDs; anything else is refused before it reaches a header.
+    // Tokens are UUIDs; refuse anything else before it reaches a header.
     if token.is_empty()
         || !token
             .bytes()

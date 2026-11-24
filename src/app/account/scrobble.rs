@@ -20,15 +20,14 @@ const POLL_FOR: Duration = Duration::from_secs(20 * 60);
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// One service's account and the plays it has yet to take.
+#[derive(Default)]
 struct Link {
     session: Option<Session>,
     pending: Pending,
     sending: bool,
-    /// The service refused a batch as invalid, so this many of its plays go
-    /// one at a time, to find the one it refuses and drop it alone.
+    /// After a refused batch, this many go one by one to find the bad play.
     singles: usize,
-    /// Bumped by connecting and disconnecting, so replies for an earlier
-    /// account or attempt are ignored.
+    /// Bumped on connect and disconnect, so late replies are ignored.
     generation: u64,
 }
 
@@ -42,9 +41,7 @@ impl Link {
         Self {
             session,
             pending,
-            sending: false,
-            singles: 0,
-            generation: 0,
+            ..Default::default()
         }
     }
 }
@@ -114,12 +111,19 @@ impl App {
 
     /// Starts logging the song just started, and sends it as playing now.
     pub(in crate::app) fn scrobble_started(self: &Rc<Self>) {
-        let play = {
+        let (play, sends) = {
             let mut state = self.state.borrow_mut();
             let state = &mut *state;
             let scrobbler = &mut state.scrobbler;
             scrobbler.playing = None;
-            if scrobbler.links.iter().all(|link| link.session.is_none()) {
+            let sends: Vec<_> = Service::ALL
+                .into_iter()
+                .zip(&scrobbler.links)
+                .filter_map(|(service, link)| {
+                    Some((service, link.session.clone()?, link.generation))
+                })
+                .collect();
+            if sends.is_empty() {
                 return;
             }
             let Some(track) = state.queue.current() else {
@@ -144,19 +148,13 @@ impl App {
                 return;
             }
             scrobbler.playing = Some(play.clone());
-            play
+            (play, sends)
         };
-        for service in Service::ALL {
-            let Some((session, generation)) = ({
-                let link = self.link(service);
-                link.session.clone().map(|s| (s, link.generation))
-            }) else {
-                continue;
-            };
+        for (service, session, generation) in sends {
             let play = play.clone();
             self.spawn(
                 async move { service.now_playing(&session, &play).await },
-                move |app, result| app.scrobble_failed(service, result, generation),
+                move |app, result| app.scrobble_answered(service, result, generation),
             );
         }
     }
@@ -200,7 +198,7 @@ impl App {
             let batch = link.pending.batch(link.singles > 0);
             (session, batch, link.generation)
         };
-        // Only the result comes back, so a panic still clears `sending`.
+        // A copy, as `work` returns only the result, which a panic still delivers.
         let sent = batch.clone();
         self.spawn(
             async move { service.scrobble(&session, &sent).await },
@@ -209,8 +207,7 @@ impl App {
                     let link = &mut *app.link_mut(service);
                     link.sending = false;
                     let more = match &result {
-                        // For an earlier account, whose plays are gone; newer
-                        // ones may have waited behind it.
+                        // An earlier account's reply; send what queued behind it.
                         _ if link.generation != generation => true,
                         Ok(()) => {
                             link.pending.sent(&batch);
@@ -222,8 +219,7 @@ impl App {
                             link.singles = batch.len();
                             true
                         }
-                        // Waits before the next, so a refusal that isn't
-                        // about the play costs a play a minute, not them all.
+                        // Wait, so a refusal not about the play costs one a minute, not all.
                         Err(Error::Rejected(e)) => {
                             log::warn!("{} refused a play: {e}", service.name());
                             link.pending.sent(&batch);
@@ -232,10 +228,14 @@ impl App {
                         }
                         Err(_) => false,
                     };
-                    link.pending.save();
-                    (!link.pending.is_empty()).then_some(more)
+                    let more = (!link.pending.is_empty()).then_some(more);
+                    // Once the drain stops; the exit save covers a crash mid-drain.
+                    if more != Some(true) {
+                        link.pending.save();
+                    }
+                    more
                 };
-                app.scrobble_failed(service, result, generation);
+                app.scrobble_answered(service, result, generation);
                 match more {
                     Some(true) => app.send_scrobbles_to(service),
                     Some(false) => app.send_scrobbles_later(),
@@ -257,10 +257,8 @@ impl App {
             });
     }
 
-    /// Forgets an account whose access was revoked, keeping its plays for
-    /// when it connects again; other failures keep the plays for the next
-    /// attempt. Replies for an earlier account change nothing.
-    fn scrobble_failed(
+    /// Forgets a revoked account, keeping its plays; logs other failures.
+    fn scrobble_answered(
         self: &Rc<Self>,
         service: Service,
         result: Result<(), Error>,
@@ -379,9 +377,8 @@ impl App {
         });
     }
 
-    /// Forgets the account, or stops waiting for one to connect. Plays not
-    /// yet sent are dropped with an account, so none reach the next one;
-    /// stopping a wait keeps those of an account whose access was revoked.
+    /// Disconnecting drops unsent plays so no other account gets them;
+    /// cancelling a wait keeps a revoked account's.
     pub(in crate::app) fn disconnect_scrobbling(&self, service: Service) {
         let connected = self.link(service).session.is_some();
         self.end_scrobbling(service);

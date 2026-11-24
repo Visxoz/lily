@@ -185,7 +185,6 @@ pub(super) struct State {
     pub(super) library_revision: u64,
     /// Bumped by each `load_library`, so only the latest answer is shown.
     pub(super) library_generation: u64,
-    /// The sleep timer, if set.
     pub(super) sleep: Option<playback::sleep::Sleep>,
 }
 

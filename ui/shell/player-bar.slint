@@ -118,7 +118,7 @@ export component PlayerBar inherits Rectangle {
         }
     }
 
-    // Above the bar, its right edge under the button's.
+    // Opens upwards, right-aligned to the button.
     sleep-menu := PopupMenu {
         x: sleep-button.absolute-position.x - root.absolute-position.x + sleep-button.width - self.width;
         y: -self.height - 4px;

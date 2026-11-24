@@ -11,9 +11,7 @@ pub const USER_AGENT: &str = concat!("Lily/", env!("CARGO_PKG_VERSION"));
 pub const TIMEOUT: Duration = Duration::from_secs(20);
 /// Most plays sent in one request, Last.fm's limit.
 const BATCH: usize = 50;
-/// Plays kept while a service cannot be reached. Last.fm refuses plays
-/// more than two weeks old anyway, and this is a fortnight of heavy
-/// listening.
+/// About a fortnight of heavy listening; Last.fm refuses older plays anyway.
 const PENDING_LIMIT: usize = 3000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -22,9 +20,8 @@ pub enum Service {
     ListenBrainz,
 }
 
-/// A connected account: Last.fm's session key, or a ListenBrainz token.
-/// Neither expires; the user can revoke it, which `Error::SignedOut` then
-/// reports.
+/// Last.fm's session key or a ListenBrainz token. Neither expires, but
+/// either can be revoked (`Error::SignedOut`).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     pub name: String,
@@ -114,8 +111,7 @@ pub enum Error {
     SignedOut,
     /// The user has not yet allowed access in the browser.
     NotYetAllowed,
-    /// The service will never take the request as it is: invalid
-    /// parameters, or a token that expired.
+    /// Refused as sent (bad parameters, an expired token); retrying won't help.
     Rejected(String),
     /// The service could not be reached or could not answer; try again later.
     Failed(String),
@@ -146,8 +142,7 @@ pub fn counts(heard: Duration, length: Duration) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Pending {
     plays: VecDeque<Play>,
-    /// The account the plays were heard under, so they never go to another
-    /// that connects after its access was revoked.
+    /// Who the plays were heard as, so no other account gets them.
     #[serde(default)]
     account: Option<String>,
     #[serde(skip)]
@@ -193,12 +188,12 @@ impl Pending {
         self.plays.iter().take(size).cloned().collect()
     }
 
-    /// Drops `sent`, which the service has taken or refused. Matched by
-    /// value rather than position, as the oldest play may have made way for
-    /// a new one while they were on their way.
+    /// Drops `sent`, taken or refused: the front, less any the limit dropped
+    /// meanwhile.
     pub fn sent(&mut self, sent: &[Play]) {
-        self.plays.retain(|play| !sent.contains(play));
-        self.changed = true;
+        let n = self.plays.iter().take_while(|p| sent.contains(p)).count();
+        self.plays.drain(..n);
+        self.changed |= n > 0;
     }
 
     pub fn save(&mut self) {

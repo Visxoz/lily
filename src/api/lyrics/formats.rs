@@ -89,7 +89,7 @@ struct Reader<'a> {
     /// Each line's translation and romanisation.
     extras: [Vec<String>; 2],
     timed: bool,
-    // Only <p> in <body> is sung: <head> holds translations and romanisations, by line key.
+    // Only <body>'s <p> is sung; <head> holds the extras by line key.
     in_body: bool,
     in_line: bool,
     /// The head's first translation and romanisation, by line key.
@@ -134,7 +134,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Whether to read the node's children: a translation or romanisation isn't sung.
+    /// Whether to read the children: extras aren't sung.
     fn open(&mut self, node: Node<'a, '_>) -> bool {
         if node.is_text() {
             if self.in_line {
@@ -150,10 +150,11 @@ impl<'a> Reader<'a> {
                 } else {
                     ROMANISED
                 };
-                // Another language's would mix with the first's.
-                if self.by_key[kind].is_empty() {
-                    self.section = Some(kind);
+                // Only the first language's, unread past it.
+                if !self.by_key[kind].is_empty() {
+                    return false;
                 }
+                self.section = Some(kind);
             }
             "text" if let Some(kind) = self.section => {
                 if let Some(key) = attribute(node, "for") {
@@ -259,7 +260,7 @@ impl<'a> Reader<'a> {
                         .and_then(|key| self.by_key[kind].remove(key))
                         .unwrap_or_default();
                 }
-                // One the same as the line, as an English line's, adds nothing.
+                // A copy of the line adds nothing.
                 extras.push(if extra == text { String::new() } else { extra });
             }
             self.lines.push(text);

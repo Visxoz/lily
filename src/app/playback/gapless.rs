@@ -56,7 +56,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|(id, ..)| next != Some(id.as_str()));
             let near_end = playback.started
-                && !matches!(state.sleep, Some(Sleep::EndOfSong))
+                && state.sleep != Some(Sleep::EndOfSong)
                 && playback.duration > 0.0
                 && playback.duration - position <= lead
                 && (playback.queued.is_none() || stale);
@@ -87,11 +87,13 @@ impl App {
         let resolved_at = prefetched.as_ref().map_or_else(Instant::now, |(_, at)| *at);
         let resolve = self.resolve_future(next_id.clone(), prefetched.map(|(stream, _)| stream));
         self.spawn(resolve, move |app, result| {
-            let still_next = {
+            let (current, still_next) = {
                 let state = app.state.borrow();
-                state.playback.generation == generation
-                    && !matches!(state.sleep, Some(Sleep::EndOfSong))
-                    && state.queue.peek_next().is_some_and(|t| t.id == next_id)
+                let current = state.playback.generation == generation;
+                let next = current
+                    && state.sleep != Some(Sleep::EndOfSong)
+                    && state.queue.peek_next().is_some_and(|t| t.id == next_id);
+                (current, next)
             };
             match result {
                 Ok(stream) if still_next => {
@@ -101,6 +103,11 @@ impl App {
                     let playback = &mut app.state.borrow_mut().playback;
                     playback.queued = Some((next_id, stream, resolved_at));
                     playback.queued_failed = false;
+                }
+                // Kept, so Play after the sleep timer's stop doesn't ask again.
+                Ok(stream) if current => {
+                    let playback = &mut app.state.borrow_mut().playback;
+                    playback.prefetched.insert(next_id, (stream, resolved_at));
                 }
                 Ok(_) => {}
                 Err(e) => log::debug!("could not queue the next track: {e}"),

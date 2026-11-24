@@ -220,7 +220,7 @@ pub struct Settings {
     /// The full player plays the song's Spotify Canvas or its album's Apple
     /// Music motion cover, where there is one.
     pub animated_art: bool,
-    /// Lyric lines show their translation beneath them, where the lyrics have one.
+    /// Shows each lyric line's translation beneath it.
     pub lyrics_translation: bool,
     /// Likewise their romanisation.
     pub lyrics_romanisation: bool,
