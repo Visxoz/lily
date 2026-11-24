@@ -11,7 +11,7 @@ index 542a882..224a195 100644
  
  [dependencies.tracing]
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index 06386bc..ddc654f 100644
+index 06386bc..beb1f14 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
 @@ -32,7 +32,8 @@ mod channel_rss;
@@ -142,7 +142,42 @@ index 06386bc..ddc654f 100644
  }
  
  #[derive(Clone)]
-@@ -797,6 +893,8 @@ impl RustyPipeBuilder {
+@@ -599,6 +695,10 @@ struct CacheEntry<T> {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     failed_version: Option<String>,
+     data: Option<T>,
++    /// Stale data is being fetched afresh in the background, so no other
++    /// caller starts a second fetch.
++    #[serde(skip)]
++    refreshing: bool,
+ }
+ 
+ #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+@@ -619,9 +719,14 @@ struct RequestResult<T> {
+ impl<T> CacheEntry<T> {
+     /// Get the content of the cache if it is still fresh
+     fn get(&self) -> Option<&T> {
++        self.get_within(1)
++    }
++
++    /// Get the content of the cache if it was updated within `days`
++    fn get_within(&self, days: i64) -> Option<&T> {
+         self.data.as_ref().filter(|_| {
+             self.last_update.unwrap_or(OffsetDateTime::UNIX_EPOCH)
+-                > (OffsetDateTime::now_utc() - time::Duration::days(1))
++                > (OffsetDateTime::now_utc() - time::Duration::days(days))
+         })
+     }
+ 
+@@ -659,6 +764,7 @@ impl<T> From<T> for CacheEntry<T> {
+             retry_at: None,
+             failed_version: None,
+             data: Some(f),
++            refreshing: false,
+         }
+     }
+ }
+@@ -797,6 +903,8 @@ impl RustyPipeBuilder {
                  user_agent,
                  visitor_data_cache,
                  botguard,
@@ -151,7 +186,7 @@ index 06386bc..ddc654f 100644
              }),
          })
      }
-@@ -1099,6 +1197,7 @@ impl RustyPipe {
+@@ -1099,6 +1207,7 @@ impl RustyPipe {
  
              let err = match resp {
                  Ok(resp) => {
@@ -159,7 +194,7 @@ index 06386bc..ddc654f 100644
                      let status = resp.status();
                      // Immediately return in case of success or unrecoverable status code
                      if status.is_success()
-@@ -1160,6 +1259,37 @@ impl RustyPipe {
+@@ -1160,6 +1269,37 @@ impl RustyPipe {
          Ok(self.http_request_estatus(request).await?.text().await?)
      }
  
@@ -197,7 +232,51 @@ index 06386bc..ddc654f 100644
      async fn extract_client_version(&self, client_type: ClientType) -> Result<String, Error> {
          let (sw_url, html_url, origin, ua) = match client_type {
              ClientType::Desktop => (
-@@ -1325,7 +1455,11 @@ impl RustyPipe {
+@@ -1234,6 +1374,18 @@ impl RustyPipe {
+         match client.get() {
+             Some(cdata) => cdata.version.clone().into(),
+             None => {
++                // A version a few days old still works, so a request isn't held
++                // behind fetching it again: that happens behind it, one fetch at a
++                // time. One older than that waits for a fresh one, as before.
++                if let Some(stale) = client.get_within(7) {
++                    let version = stale.version.clone();
++                    if !client.refreshing && client.should_retry() {
++                        client.refreshing = true;
++                        let rp = self.clone();
++                        tokio::spawn(async move { rp.refresh_client_version(client_type).await });
++                    }
++                    return version.into();
++                }
+                 if client.should_retry() {
+                     tracing::debug!("getting {client_type:?} client version");
+                     match self.extract_client_version(client_type).await {
+@@ -1270,6 +1422,24 @@ impl RustyPipe {
+         }
+     }
+ 
++    /// Fetch a stale client version afresh, without holding the cache's lock
++    /// meanwhile, so requests keep taking the stale one rather than waiting.
++    async fn refresh_client_version(&self, client_type: ClientType) {
++        tracing::debug!("refreshing {client_type:?} client version");
++        let res = self.extract_client_version(client_type).await;
++        let mut client = self.inner.cache.clients[&client_type].write().await;
++        match res {
++            Ok(version) => *client = CacheEntry::from(ClientData { version }),
++            Err(e) => {
++                client.refreshing = false;
++                client.retry_later(1);
++                tracing::warn!("{e}, keeping the expired {client_type:?} client version");
++            }
++        }
++        drop(client);
++        self.store_cache().await;
++    }
++
+     /// Get deobfuscation data (either from cache or extracted from YouTube's JavaScript code)
+     async fn get_deobf_data(&self) -> Result<DeobfData, Error> {
+         // Write lock here to prevent concurrent tasks from fetching the same data
+@@ -1325,7 +1495,11 @@ impl RustyPipe {
      }
  
      /// Write the current cache data to the storage backend.
@@ -210,7 +289,7 @@ index 06386bc..ddc654f 100644
          let mut cache_clients = HashMap::new();
          for (c, lk) in &self.inner.cache.clients {
              let v = lk.read().await.clone();
-@@ -1663,6 +1797,65 @@ impl RustyPipe {
+@@ -1663,6 +1837,65 @@ impl RustyPipe {
          Ok(())
      }
  
@@ -276,7 +355,35 @@ index 06386bc..ddc654f 100644
      /// Attempt to fetch the YouTube website with login cookies to check if the user is successfully logged in
      /// and the session is still valid.
      pub async fn user_auth_check_cookie(&self) -> Result<(), Error> {
-@@ -2345,7 +2538,7 @@ impl RustyPipeQuery {
+@@ -2315,6 +2548,18 @@ impl RustyPipeQuery {
+         )
+     }
+ 
++    /// A visitor data ID from the pool, with the client version the request
++    /// needs fetched alongside it, as both may cost a round trip.
++    async fn pooled_visitor_data(&self, ctype: ClientType) -> Result<String, Error> {
++        let version = async {
++            // Only the web and TV clients' versions are fetched.
++            if self.client.inner.cache.clients.contains_key(&ctype) {
++                self.client.get_client_version(ctype).await;
++            }
++        };
++        tokio::join!(self.client.inner.visitor_data_cache.get(), version).0
++    }
++
+     /// Execute a request to the YouTube API, then deobfuscate and map the response.
+     ///
+     /// Runs a single attempt, returns Ok with a erroneous RequestResult in case of a
+@@ -2337,7 +2582,7 @@ impl RustyPipeQuery {
+             .map(Cow::Borrowed)
+         {
+             Some(vd) => vd,
+-            None => self.client.inner.visitor_data_cache.get().await?.into(),
++            None => self.pooled_visitor_data(ctype).await?.into(),
+         };
+ 
+         let context = self
+@@ -2345,7 +2590,7 @@ impl RustyPipeQuery {
              .await;
          let req_body = QBody { context, body };
  
@@ -285,7 +392,7 @@ index 06386bc..ddc654f 100644
              id,
              lang: self.opts.lang,
              utc_offset: UtcOffset::from_whole_seconds(i32::from(self.opts.utc_offset_minutes) * 60)
-@@ -2370,10 +2563,15 @@ impl RustyPipeQuery {
+@@ -2370,10 +2615,15 @@ impl RustyPipeQuery {
              .http
              .execute(request.try_clone().unwrap())
              .await?;
@@ -301,7 +408,7 @@ index 06386bc..ddc654f 100644
  
          let res = if status.is_client_error() || status.is_server_error() {
              let error_msg = serde_json::from_str::<response::ErrorResponse>(&body)
-@@ -2427,15 +2625,23 @@ impl RustyPipeQuery {
+@@ -2427,15 +2677,23 @@ impl RustyPipeQuery {
          ctx_src: &MapRespOptions<'_>,
      ) -> Result<RequestResult<M>, Error> {
          let mut last_resp = None;
@@ -326,7 +433,14 @@ index 06386bc..ddc654f 100644
                          return Ok(resp);
                      }
                      e
-@@ -2620,13 +2826,33 @@ impl RustyPipeQuery {
+@@ -2614,19 +2872,39 @@ impl RustyPipeQuery {
+     ) -> Result<String, Error> {
+         let visitor_data = match self.opts.visitor_data.as_deref().map(Cow::Borrowed) {
+             Some(vd) => vd,
+-            None => self.client.inner.visitor_data_cache.get().await?.into(),
++            None => self.pooled_visitor_data(ctype).await?.into(),
+         };
+ 
          let context = self.get_context(ctype, true, &visitor_data).await;
          let req_body = QBody { context, body };
  
@@ -367,7 +481,7 @@ index 06386bc..ddc654f 100644
      }
  }
  
-@@ -2764,6 +2990,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
+@@ -2764,6 +3042,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
  mod tests {
      use super::*;
  
