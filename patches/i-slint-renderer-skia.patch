@@ -103,10 +103,84 @@ index ba9ed30..5b971c4 100644
          let Some(surface) = surface.as_ref() else { return Ok(DrawOutcome::Success) };
          self.invoke_rendering_notifier_setup(surface.as_ref())?;
 diff --git a/wgpu_30_surface.rs b/wgpu_30_surface.rs
-index 7d7d540..030a9df 100644
+index 7d7d540..f53ca00 100644
 --- a/wgpu_30_surface.rs
 +++ b/wgpu_30_surface.rs
-@@ -363,12 +363,15 @@ impl crate::Surface for WGPUSurface {
+@@ -9,9 +9,10 @@ use i_slint_core::partial_renderer::DirtyRegion;
+ use i_slint_core::platform::PlatformError;
+ use i_slint_core::renderer::DrawOutcome;
+ 
+-use std::cell::RefCell;
++use std::cell::{Cell, RefCell};
+ use std::rc::Rc;
+ use std::sync::Arc;
++use std::time::{Duration, Instant};
+ 
+ use wgpu_30 as wgpu;
+ 
+@@ -49,8 +50,15 @@ pub struct WGPUSurface {
+     textures_to_transition_for_sampling: RefCell<Vec<wgpu::Texture>>,
+     pub(crate) backend: Backend,
+     alpha_modes: Vec<wgpu::CompositeAlphaMode>,
++    /// When `clean_up_cache` last freed what Skia's cache no longer uses.
++    last_cleanup: Cell<Instant>,
+ }
+ 
++/// How often a drawn frame frees the GPU resources Skia's cache holds unused.
++const CACHE_CLEANUP_EVERY: Duration = Duration::from_secs(10);
++/// How long a cached GPU resource goes unused before it is freed.
++const CACHE_UNUSED_FOR: Duration = Duration::from_secs(30);
++
+ /// The alpha mode to composite the surface with: a translucent one when the window is
+ /// transparent, and `Opaque` when it isn't. Metal (CAMetalLayer) only offers `PostMultiplied`,
+ /// so it has to be a fallback. `None` when the surface advertises nothing suitable.
+@@ -144,6 +152,7 @@ impl WGPUSurface {
+             textures_to_transition_for_sampling: RefCell::new(Vec::new()),
+             backend,
+             alpha_modes: swapchain_capabilities.alpha_modes,
++            last_cleanup: Cell::new(Instant::now()),
+         })
+     }
+ 
+@@ -163,6 +172,7 @@ impl WGPUSurface {
+             textures_to_transition_for_sampling: RefCell::new(Vec::new()),
+             backend,
+             alpha_modes: vec![],
++            last_cleanup: Cell::new(Instant::now()),
+         }
+     }
+ 
+@@ -236,6 +246,29 @@ impl WGPUSurface {
+             Err("Skia renderer: submitting the rendering to the GPU failed".into())
+         }
+     }
++
++    /// Frees the GPU resources in Skia's cache that nothing has used for a while, as Skia
++    /// otherwise keeps them until its budget fills. Resources still referenced, or in use by
++    /// submitted work, aren't purgeable, so only idle ones go.
++    fn clean_up_cache(&self, gr_context: &mut skia_safe::gpu::DirectContext) {
++        if self.last_cleanup.get().elapsed() < CACHE_CLEANUP_EVERY {
++            return;
++        }
++        self.last_cleanup.set(Instant::now());
++        gr_context.perform_deferred_cleanup(
++            CACHE_UNUSED_FOR,
++            skia_safe::gpu::PurgeResourceOptions::AllResources,
++        );
++        if cfg!(debug_assertions) {
++            let usage = gr_context.resource_cache_usage();
++            i_slint_core::debug_log!(
++                "Skia resource cache: {} bytes in {} resources, limit {} bytes",
++                usage.resource_bytes,
++                usage.resource_count,
++                gr_context.resource_cache_limit()
++            );
++        }
++    }
+ }
+ 
+ /// The wgpu stack a surface renders with.
+@@ -363,12 +396,15 @@ impl crate::Surface for WGPUSurface {
              }
          }
  
@@ -124,7 +198,15 @@ index 7d7d540..030a9df 100644
          let wgpu = Rc::new(SharedWgpuState { instance, adapter, device, queue });
          let new_surface = Self::init_with_parts(wgpu.clone(), surface, size, transparent)?;
          if !manual_configuration {
-@@ -627,6 +630,65 @@ impl crate::Surface for WGPUSurface {
+@@ -489,6 +525,7 @@ impl crate::Surface for WGPUSurface {
+         self.backend.release_swapchain_surface(gr_context, &mut skia_surface)?;
+ 
+         self.flush_and_submit(gr_context)?;
++        self.clean_up_cache(gr_context);
+ 
+         // Skia drew via the raw queue behind wgpu's back, and `Queue::present` skips its own
+         // transition when the tracker already says PRESENT, so nothing would order the
+@@ -627,6 +664,65 @@ impl crate::Surface for WGPUSurface {
      }
  }
  
