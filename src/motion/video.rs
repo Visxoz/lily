@@ -35,12 +35,11 @@ pub struct Frame {
     pub at: Duration,
 }
 
-/// Decodes the clip at `path` on a thread of its own, over and over, at its
-/// own size, handing each frame over only as the receiver takes it. `at` is
-/// the frame's presentation time counted across loops, so it only grows. The
-/// thread ends once the receiver is dropped, or on any error (logged at warn,
-/// without the path's user folder). Pausing is the receiver not pulling: the
-/// thread then blocks and costs no CPU.
+/// Loops the clip at `path` on its own thread, at its own size, handing each
+/// frame over only as the receiver takes it, so a receiver not pulling pauses
+/// it at no CPU. `at` counts across loops, so it only grows. The thread ends
+/// once the receiver is dropped, or on an error, logged without the path's
+/// user folder.
 pub fn play(path: PathBuf) -> Receiver<Frame> {
     // No buffer, as the receiver keeps the next frame itself.
     let (frames, receiver) = sync_channel(0);
@@ -60,8 +59,7 @@ pub fn play(path: PathBuf) -> Receiver<Frame> {
 
 fn run(path: &Path, frames: &SyncSender<Frame>) -> std::result::Result<(), String> {
     let mf = Mf::load()?;
-    // Declared in this order so the reader goes first, then Media
-    // Foundation, then COM.
+    // Dropped in reverse: the reader, then Media Foundation, then COM.
     let _com = Com::init()?;
     let _started = mf.start()?;
     decode(&mf, path, frames).map_err(|e| e.to_string())
@@ -152,11 +150,9 @@ fn decode(mf: &Mf, path: &Path, frames: &SyncSender<Frame>) -> Result<()> {
     }
 }
 
-/// One decoding thread rather than one per core, as each holds frames of its
-/// own: on a many-core machine a Canvas took 300 MB with them and 120 with
-/// one, for the same CPU.
-/// Through `ICodecAPI` the decoder refuses it once its types are set, but it
-/// still reads its attributes as streaming starts.
+/// One decoding thread rather than one per core, as each holds its own frames:
+/// a Canvas took 300 MB on many cores and 120 on one, at the same CPU. Set on
+/// the attributes, as `ICodecAPI` refuses it once the types are set.
 fn one_thread(reader: &IMFSourceReader, stream: u32) -> Result<()> {
     let reader: IMFSourceReaderEx = reader.cast()?;
     let (mut category, mut decoder) = (GUID::zeroed(), None);

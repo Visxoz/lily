@@ -110,10 +110,9 @@ fn samples_in(secs: f64, rate: u32, channels: usize) -> usize {
     (secs * f64::from(rate)) as usize * channels
 }
 
-/// How many of `held` samples move on to a device queue of `queued`: those
-/// past the `hold`, and enough to bring the queue up to `low`, but never
-/// past `ahead`. A whole crossfade hold let go at once, as when its queued
-/// track is dropped, would otherwise grow the queue for the rest of the run.
+/// How many `held` samples move on to a device queue of `queued`: those past
+/// the `hold`, and enough to reach `low`, never past `ahead`, as a dropped
+/// track's whole hold let go at once would grow the queue for good.
 fn to_spill(held: usize, hold: usize, queued: usize, low: usize, ahead: usize) -> usize {
     let short = low.saturating_sub(queued);
     let room = ahead.saturating_sub(queued).max(short);
@@ -198,9 +197,8 @@ impl Engine {
             (output.rate, output.channels)
         };
         let hold = samples_in(transition.hold_secs(), rate, channels);
-        // Sized once, as growing by doubling would overshoot by up to half,
-        // with room for the packet that lands before the excess spills, and
-        // for Automix's intro, which joins what is held at the switch.
+        // Sized once, as doubling overshoots by up to half: room for a packet
+        // landing before the excess spills, and Automix's intro, held at the switch.
         let (fade, room) = match transition {
             Transition::Gapless => (0, 0),
             Transition::Crossfade(secs) => (
@@ -265,10 +263,9 @@ impl Engine {
         (self.on_event)(PlayerEvent::NextFailed { dropped });
     }
 
-    /// Moves decoding on to the queued track once the current one is fully
-    /// decoded. Of the same format, its samples follow straight on, mixed
-    /// over the current track's held tail for a crossfade or Automix; otherwise the
-    /// device reopens once the current track has played out.
+    /// Moves decoding on to the queued track once the current one is decoded:
+    /// of the same format, straight on, mixed over the held tail for a blend;
+    /// otherwise the device reopens once the current track has played out.
     pub(super) fn try_switch(&mut self) {
         let finished = self.track.as_ref().is_some_and(|t| t.finished);
         let ready = self.next.as_ref().is_some_and(|n| n.ready.is_some());
@@ -622,10 +619,9 @@ mod tests {
         }
     }
 
-    /// Plays `first` into a `second` 6 dB louder by `transition`, checking
-    /// that what is heard is `first` up to the fade, the fade of `fade`
-    /// frames, then the rest of `second` turned down, so a switch the device
-    /// reached early or late would show.
+    /// Plays `first` into a `second` 6 dB louder, checking what is heard is
+    /// `first` up to the `fade` frames, then `second` turned down, so a switch
+    /// the device reached early or late would show.
     fn plays_through(name: &str, transition: Transition, second_secs: f64, fade: usize) {
         let (a, first) = track(&format!("{name}-a"), 1, 30.0);
         let (b, second) = track(&format!("{name}-b"), 2, second_secs);

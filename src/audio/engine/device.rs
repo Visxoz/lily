@@ -53,8 +53,7 @@ impl Engine {
             }
             self.stream = None;
             self.chosen_since = None;
-            // Closing waits for the callbacks to end, so nothing of the old
-            // stream can report it lost after this.
+            // Closing waits on its callbacks, so it can't report itself lost after.
             self.shared.device_lost.store(false, Ordering::Relaxed);
         }
         {
@@ -156,9 +155,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Opens the device again once its stream is lost, as when the output is
-    /// unplugged or another becomes the default, which cpal's stream does
-    /// not follow. The queued samples carry on from where the old one stopped.
+    /// Opens the device again once its stream is lost (unplugged, or another
+    /// became the default, which cpal doesn't follow); the queue carries on.
     pub(super) fn reopen_lost_device(&mut self) {
         // An open stream reopens at once; with none open, the last try failed.
         if !self.shared.device_lost.load(Ordering::Relaxed)
@@ -209,8 +207,8 @@ impl Engine {
         let Ok(stream) = self.build(&device, rate, channels) else {
             return;
         };
-        // Closed first, as both would drain the queue; closing waits for its
-        // callbacks, so it can't report itself lost after.
+        // Closed first, as both would drain the queue, and before the loss is
+        // cleared, as closing waits on its callbacks.
         self.stream = None;
         self.shared.device_lost.store(false, Ordering::Relaxed);
         self.shared.output.lock().unwrap().gain = 0.0;
@@ -222,11 +220,9 @@ impl Engine {
         }
     }
 
-    /// Pauses ahead of reopening a lost stream, should its device be gone, so
-    /// nothing meant for headphones plays through the speakers. The queue and
-    /// position stay, for Play to carry on from on the default. Another
-    /// device becoming the default leaves this one active, so the sound
-    /// moves to it.
+    /// Pauses before a lost stream reopens, should its device be gone, so
+    /// nothing meant for headphones plays through the speakers; Play carries
+    /// on from the queue. A device only no longer the default plays on there.
     fn pause_if_unplugged(&mut self) {
         if self.stream.is_none()
             || !self.shared.pause_on_unplug.load(Ordering::Relaxed)

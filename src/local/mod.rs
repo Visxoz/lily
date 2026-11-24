@@ -43,8 +43,8 @@ pub fn folders() -> Vec<PathBuf> {
 }
 
 /// Whether `path` is in a folder the user added. Paths anywhere else, as
-/// YouTube's data might hold, are never read, so no share the user didn't
-/// pick is ever reached.
+/// YouTube's data might hold, are never read, so no share they didn't pick
+/// is reached.
 pub fn owns(path: &Path) -> bool {
     if !path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
         return false;
@@ -98,10 +98,9 @@ struct Song {
     cover: bool,
 }
 
-/// Each file's song as last read, by path, with when it was modified then,
-/// as time since 1970, so a scan reads only files that are new or changed.
-/// A file that won't open is kept as `None`, so it isn't tried again until
-/// it changes.
+/// Each file's song by path, with its modified time since 1970 when read, so
+/// a scan reads only new or changed files. One that won't open is kept as
+/// `None`, so it isn't tried again until it changes.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Library {
     files: HashMap<PathBuf, (Duration, Option<Song>)>,

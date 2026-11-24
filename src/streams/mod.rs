@@ -70,9 +70,8 @@ const CLIENTS: &[Client] = &[
 
 pub const CLIENT_COUNT: usize = CLIENTS.len();
 
-/// Indices in `CLIENTS` whose URLs googlevideo cuts off here, as it does
-/// past the first megabyte on networks where it wants a PO token, the one
-/// refused longest ago first.
+/// Indices in `CLIENTS` whose URLs googlevideo cuts off past the first
+/// megabyte, as where it wants a PO token, refused longest ago first.
 static CUT_OFF: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 /// Asks `client` last for the rest of the session.
@@ -93,9 +92,9 @@ fn mark(cut: &mut Vec<usize>, i: usize) -> bool {
     new
 }
 
-/// The clients not cut off, then those that are, refused longest ago first:
-/// one may still resolve a song the others refuse, and a download walking
-/// on from refusal to refusal reaches each before coming back to any.
+/// The clients not cut off, then those that are, as one may still resolve a
+/// song the others refuse; a download walking on from refusal to refusal
+/// reaches each before coming back to any.
 fn clients(cut: &[usize]) -> Vec<&'static Client> {
     (0..CLIENTS.len())
         .filter(|i| !cut.contains(i))
@@ -271,8 +270,7 @@ mod tests {
                                 stream.codec,
                                 stream.bitrate_kbps.round()
                             );
-                            // Where YouTube wants a PO token, a client's URLs serve
-                            // about a megabyte, then 403; another client carries on.
+                            // Where YouTube wants a PO token, URLs 403 after a megabyte.
                             match probe_past_head(&stream).await {
                                 Ok(()) => {
                                     whole += 1;
@@ -286,9 +284,8 @@ mod tests {
                     Err(e) => failures.push(format!("{}: {e}", client.name)),
                 }
             }
-            // Only said, not failed: where YouTube wants PO tokens, as it may of
-            // a datacentre's addresses, every client is cut off whatever works
-            // for listeners elsewhere.
+            // Not a failure: from a datacentre's addresses YouTube may want PO
+            // tokens of every client, whatever works for listeners.
             if whole == 0 {
                 eprintln!("every client is cut off past the first megabyte here");
             }

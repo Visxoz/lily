@@ -85,9 +85,8 @@ pub(super) async fn find(
     Ok(chosen(own, apple, others))
 }
 
-/// The hub's lyrics, and lrc.red's when the hub has no word timing of Apple
-/// Music's kind and didn't hear from lrc.red itself. Neither waits on
-/// YouTube's, so both run alongside them.
+/// The hub's lyrics, and lrc.red's when the hub has no Apple Music word
+/// timing and didn't hear from lrc.red; both run alongside YouTube's.
 async fn other_sites(track: &Track) -> hub::Found {
     let mut found = hub::lyrics(track).await.unwrap_or_default();
     let wanted = !found.asked_lrc_red && !found.apple.iter().any(Lyrics::is_word_synced);
@@ -108,9 +107,8 @@ async fn within<T>(
     tokio::time::timeout(deadline, fetch).await.ok().flatten()
 }
 
-/// Another site's lyrics agree where YouTube's, which are always the
-/// recording playing, have mostly the same words in time, or where YouTube
-/// has none to hold them to.
+/// Another site's lyrics agree with YouTube's, always the recording playing,
+/// in mostly the same words in time, or stand where YouTube has none.
 fn checked(other: &Lyrics, own: Option<&matching::Reference>) -> bool {
     other.lines.len() <= formats::MAX_LINES && own.is_none_or(|own| own.agrees(other))
 }

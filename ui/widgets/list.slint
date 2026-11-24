@@ -1,9 +1,8 @@
 import { Theme } from "../theme.slint";
 
-/// A stand-in for the std `ListView`, scrolling on whole physical pixels, as
-/// Skia snaps text but not shapes, so fractional offsets made text jitter.
-/// Slint still virtualises it because of its name and `content-*`/`visible-*`
-/// properties.
+/// The std `ListView` scrolling on whole physical pixels, as Skia snaps text
+/// but not shapes, so fractional offsets made text jitter. Slint still
+/// virtualises it for its name and `content-*`/`visible-*` properties.
 export component ListView {
     in-out property <length> content-y;
     in-out property <length> content-height;
@@ -23,8 +22,7 @@ export component ListView {
     // Reads the frame clock only while gliding, so a resting list draws nothing.
     property <float> glide-t: root.gliding ? min(1, (animation-tick() - root.glide-start) / 200ms) : 1;
     property <length> glide-y: root.glide-from + (root.glide-to - root.glide-from) * (1 - pow(1 - root.glide-t, 3));
-    // The offset this component last wrote, to tell it apart from one set
-    // from outside.
+    // The offset last written here, to tell it from one set from outside.
     property <length> written;
     // The furthest the list goes, on the pixel grid.
     property <length> end-y: -floor(root.max-scroll / 1phx) * 1phx;
@@ -38,10 +36,9 @@ export component ListView {
             }
         }
     }
-    // Moved from outside (Slint re-estimating row heights, or a restored
-    // position): carry a glide along; its next frame puts the list back on the
-    // grid. Rounding here instead makes Slint re-estimate again, and the two
-    // chase each other.
+    // Moved from outside (row heights re-estimated, or a position restored):
+    // a glide is carried along, its next frame back on the grid. Rounding here
+    // instead makes Slint re-estimate again, and the two chase each other.
     changed content-y => {
         if root.content-y != root.written {
             if root.gliding {
@@ -51,9 +48,9 @@ export component ListView {
             root.written = root.content-y;
         }
     }
-    // Slint measures rows only as it makes them, so the end can move up past
-    // where the list rests after a long jump; it would show blank space below
-    // the last row until the next scroll. Only past the end, so no chase.
+    // Slint measures rows only as it makes them, so after a long jump the end
+    // can move up past where the list rests, leaving blank space below the
+    // last row. Only past the end, so no chase.
     changed max-scroll => {
         if root.content-y < root.end-y {
             root.written = root.end-y;

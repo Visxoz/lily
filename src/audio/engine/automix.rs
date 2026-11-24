@@ -39,8 +39,8 @@ const HELD_SECS: usize = 5;
 /// How much quieter than a later second a second may be within a fade, in dB;
 /// any more, and the quiet bars between loud ones are the music's own.
 const SWELL_DB: f32 = 3.0;
-/// How far under the loud level a held level is a noise floor a fade ends
-/// in, as tape hiss, rather than the music, in dB.
+/// A level held this far under the loud one, in dB, is a noise floor such as
+/// tape hiss, which a fade ends in, not the music.
 const HISS_DB: f32 = 30.0;
 /// How far under the loud level a fade-out ends, at least, in dB; a track
 /// ending above it stops, however it got there.
@@ -58,8 +58,7 @@ const SPREAD_HOPS: usize = 4;
 /// How far either side of the autocorrelation's peak the period is sought,
 /// in hops, as spread hits put the peak off the true lag.
 const SEARCH_HOPS: i32 = 3;
-/// How far either side of the whole-hop lag's anchor each finer period's
-/// anchor is sought, in hops.
+/// How far each finer period's anchor is sought from the whole-hop lag's.
 const ANCHOR_HOPS: i32 = 8;
 /// The stretches, in seconds, each of which must keep to the grid found.
 const STRETCH_SECS: f64 = 4.0;
@@ -296,8 +295,7 @@ fn beats(onsets: &[f32], hops_per_sec: f64) -> Option<Beats> {
     let near = rough - ANCHOR_HOPS..=rough + ANCHOR_HOPS;
     let (period, anchor) = best(&blurred, periods, near)?;
     // The blur that lets the comb find the beat also flattens it over small
-    // errors, so the grid is then fitted through where each beat's onsets
-    // centre.
+    // errors, so the grid is refitted through each beat's own onsets.
     let mut grid = (period, f64::from(anchor));
     for _ in 0..2 {
         grid = fit(&centres(onsets, grid))?;

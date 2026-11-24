@@ -86,17 +86,16 @@ fn accent_of(small: &image::RgbImage) -> Color {
         (0.0, 0.0, 0.0)
     };
     let (h, s, _) = rgb_to_hsl(r, g, b);
-    // Muted artwork with a hue all the same, such as a bluish photo, stays
-    // clear of greyish artwork's floor, so `vivid` can tell them apart.
-    // Chroma, unlike saturation, stays low for near-black with a cast.
+    // Muted artwork of one hue, as a bluish photo, stays clear of greyish
+    // artwork's floor, so `vivid` tells them apart; chroma, unlike
+    // saturation, stays low for near-black with a cast.
     let chroma = r.max(g).max(b) - r.min(g).min(b);
     let s = if chroma >= 0.05 && colour >= COLOURFUL_WEIGHT {
         s.clamp(MIN_ACCENT_SATURATION + 0.1, 0.7)
     } else {
         MIN_ACCENT_SATURATION
     };
-    // Bright hues such as yellow are darkened further to keep white text
-    // at 4.5:1.
+    // Bright hues such as yellow darken further, keeping white text at 4.5:1.
     readable(from_hsl(h, s, 0.32), true)
 }
 
@@ -118,8 +117,7 @@ fn backdrop_of(small: &image::RgbImage) -> Pixels {
         }
         let [r, g, b] = sum.map(|c| c / (block * block) as f32);
         let (h, _, l) = rgb_to_hsl(r, g, b);
-        // Chroma rather than saturation, which runs high for near-black
-        // with a cast.
+        // Chroma, as saturation runs high for near-black with a cast.
         let chroma = r.max(g).max(b) - r.min(g).min(b);
         let (r, g, b) = channels(readable(
             from_hsl(h, (chroma * 1.5).min(0.8), 0.25 + l * 0.1),
@@ -202,8 +200,7 @@ pub fn readable(colour: Color, light: bool) -> Color {
     if (lowest..=highest).contains(&lum) {
         return colour;
     }
-    // A little inside the range, which rounding to 8-bit channels could
-    // otherwise step out of.
+    // A little inside, so rounding to 8-bit channels can't step out.
     let target = if lum > highest {
         highest - 0.01
     } else {
