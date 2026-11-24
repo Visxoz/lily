@@ -30,6 +30,8 @@ export global Theme {
 
     /// Behind Home, a dark take on the accent; Lily's orchid gives #4d2140.
     out property <color> home-tint: root.accent.mix(#000000, 0.36);
+    /// Home's second glow, the accent leaning to the icon's violet as its gradient does.
+    out property <color> home-glow: root.accent.mix(#9b5cff, 0.4);
     /// The icon's orchid-to-violet gradient, as its SVG lays it across the square.
     out property <brush> lily: @linear-gradient(141deg, #f472d0 20%, #9b5cff 80%);
 

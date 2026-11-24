@@ -177,6 +177,12 @@ impl App {
                         row.cards.set_row_data(c, card);
                     }
                 }
+                for t in 0..row.tracks.row_count() {
+                    if let Some(mut track) = row.tracks.row_data(t).filter(|t| has(&t.art)) {
+                        track.art = Image::default();
+                        row.tracks.set_row_data(t, track);
+                    }
+                }
                 if has(&row.art) || has(&row.backdrop) || has(&row.track.art) {
                     row.art = Image::default();
                     row.backdrop = Image::default();

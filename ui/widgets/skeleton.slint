@@ -79,6 +79,9 @@ export component PagePlaceholder inherits Placeholder {
     property <bool> grid: root.shape == "grid";
     property <bool> songs: !root.genre && !root.chips && !root.grid;
     property <bool> greeted: root.home || root.charts;
+    // Home's songs are a shelf of columns (`SongShelf`), card shelves after.
+    property <int> song-columns: max(1, floor((root.inner + Layout.song-gap) / (Layout.song-width + Layout.song-gap)));
+    property <length> song-cell: (root.inner - (root.song-columns - 1) * Layout.song-gap) / root.song-columns;
     // Search's top result, titled, above its songs.
     property <bool> top-result: root.shape == "search";
     // A section title before the first row.
@@ -106,9 +109,11 @@ export component PagePlaceholder inherits Placeholder {
         : root.grid ? Layout.card-height(root.cell) + Layout.card-gap
         : root.genre ? root.shelf-height : 56px;
     property <int> fits: max(0, (root.height - root.header) / root.step + 1);
-    property <int> count: root.charts ? min(10, root.fits) : root.fits;
-    // Past the number column, then the art unless numbered.
-    property <length> text-x: root.pad + (root.numbered ? 56px : 108px);
+    property <int> count: root.greeted ? min(Layout.song-rows, root.fits) : root.fits;
+    // Past the number column, then the art unless numbered; a shelf's column
+    // has no number, and no duration at its end.
+    property <length> text-x: root.greeted ? 64px : root.pad + (root.numbered ? 56px : 108px);
+    property <length> text-end: root.greeted ? 24px : root.pad;
 
     if root.listed: Block {
         x: root.pad;
@@ -181,12 +186,12 @@ export component PagePlaceholder inherits Placeholder {
         pulse: root.pulse;
     }
 
-    // Below the songs, once all 10 fit.
-    for i in root.charts && root.fits > 10 ? 2 : 0: Shelf {
-        y: root.header + root.count * root.step + i * root.shelf-height;
+    // Below the songs: New releases and Top artists signed out, more mixes signed in.
+    for i in root.greeted ? 2 : 0: Shelf {
+        y: root.header + root.count * root.step + 8px + i * root.shelf-height;
         height: root.shelf-height;
         pulse: root.pulse;
-        round: i == 1;
+        round: root.charts && i == 1;
     }
 
     for i in root.count: Rectangle {
@@ -203,26 +208,31 @@ export component PagePlaceholder inherits Placeholder {
             border-radius: root.chips ? 8px : 6px;
             pulse: root.pulse;
         }
-        if root.songs && !root.numbered: Block {
-            x: root.pad + 56px;
-            y: 8px;
-            width: 40px;
-            height: 40px;
-            pulse: root.pulse;
-        }
-        if root.songs: Block {
-            x: root.text-x;
-            y: 12px;
-            width: (root.width - self.x - root.pad) * (0.3 + 0.08 * mod(i * 5, 4));
-            height: 14px;
-            pulse: root.pulse;
-        }
-        if root.songs: Block {
-            x: root.text-x;
-            y: 32px;
-            width: (root.width - self.x - root.pad) * 0.18;
-            height: 12px;
-            pulse: root.pulse;
+        // One column of songs, or a shelf's columns side by side.
+        for c in !root.songs ? 0 : root.greeted ? root.song-columns : 1: Rectangle {
+            x: root.greeted ? root.pad + c * (root.song-cell + Layout.song-gap) : 0;
+            width: root.greeted ? root.song-cell : root.width;
+            if !root.numbered: Block {
+                x: root.greeted ? 12px : root.pad + 56px;
+                y: 8px;
+                width: 40px;
+                height: 40px;
+                pulse: root.pulse;
+            }
+            Block {
+                x: root.text-x;
+                y: 12px;
+                width: (parent.width - self.x - root.text-end) * (0.3 + 0.08 * mod(i * 5 + c * 3, 4));
+                height: 14px;
+                pulse: root.pulse;
+            }
+            Block {
+                x: root.text-x;
+                y: 32px;
+                width: (parent.width - self.x - root.text-end) * (root.greeted ? 0.3 : 0.18);
+                height: 12px;
+                pulse: root.pulse;
+            }
         }
     }
 }

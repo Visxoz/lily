@@ -1,8 +1,9 @@
 import { Icons, Theme } from "../theme.slint";
-import { CardItem } from "../types.slint";
+import { CardItem, TrackItem } from "../types.slint";
 import { IconButton } from "../widgets/buttons.slint";
 import { Card } from "cards.slint";
 import { Layout } from "layout.slint";
+import { TrackRow } from "track-row.slint";
 
 /// A carousel's scroll button, dark so it shows over any artwork.
 export component CarouselArrow inherits IconButton {
@@ -74,5 +75,56 @@ export component Carousel {
         x: root.width - self.width + 14px;
         icon: Icons.forward;
         clicked => { root.offset = min(root.max-offset, root.offset + root.page); }
+    }
+}
+
+/// Home's songs, in columns of `Layout.song-rows` that page sideways as a
+/// carousel does, so a long shelf needs no "more".
+export component SongShelf {
+    in property <[TrackItem]> tracks;
+    in property <int> section;
+    property <int> columns: ceil(root.tracks.length / Layout.song-rows);
+    /// Whole columns fill the width, so an arrow pages by whole columns.
+    property <int> shown: max(1, floor((root.width + Layout.song-gap) / (Layout.song-width + Layout.song-gap)));
+    property <length> column-width: (root.width - (root.shown - 1) * Layout.song-gap) / root.shown;
+    property <length> step: root.column-width + Layout.song-gap;
+    property <int> last-first: max(0, root.columns - root.shown);
+    /// The first column in view, kept in columns so a resize keeps it.
+    property <int> first;
+    property <int> at: min(root.first, root.last-first);
+    height: min(root.tracks.length, Layout.song-rows) * Layout.song-height;
+
+    Rectangle {
+        clip: true;
+        Rectangle {
+            x: -root.at * root.step;
+            animate x {
+                duration: 400ms;
+                easing: ease-in-out;
+            }
+            for track[i] in root.tracks: TrackRow {
+                x: floor(i / Layout.song-rows) * root.step;
+                y: mod(i, Layout.song-rows) * Layout.song-height;
+                width: root.column-width;
+                height: Layout.song-height;
+                track: track;
+                compact: true;
+                section: root.section;
+                index: i;
+            }
+        }
+    }
+
+    if root.at > 0: CarouselArrow {
+        x: -14px;
+        y: (root.height - self.height) / 2;
+        icon: Icons.back;
+        clicked => { root.first = max(0, root.at - root.shown); }
+    }
+    if root.at < root.last-first: CarouselArrow {
+        x: root.width - self.width + 14px;
+        y: (root.height - self.height) / 2;
+        icon: Icons.forward;
+        clicked => { root.first = min(root.last-first, root.at + root.shown); }
     }
 }

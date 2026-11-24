@@ -19,6 +19,11 @@ export global Layout {
     /// The least width that fits the buttons beside the artwork.
     out property <length> inline-actions-from: 720px;
     out property <length> top-height: 236px;
+    /// A song shelf's columns: songs in each, and the least width of one.
+    out property <int> song-rows: 4;
+    out property <length> song-width: 340px;
+    out property <length> song-gap: 16px;
+    out property <length> song-height: 56px;
 
     // Card height for a given card width: the artwork is the width less the
     // padding either side, and the padding above and below gives that back.
@@ -86,6 +91,9 @@ export global Rows {
         }
         if row.kind == RowKind.carousel {
             return Layout.card-height(Layout.card-width) + 8px;
+        }
+        if row.kind == RowKind.songs {
+            return min(row.tracks.length, Layout.song-rows) * Layout.song-height + 8px;
         }
         if row.kind == RowKind.top {
             return Layout.top-height;

@@ -1,10 +1,20 @@
 import { Theme } from "../theme.slint";
-import { Api, RowItem } from "../types.slint";
+import { Api, RowItem, RowKind } from "../types.slint";
 import { PageRow } from "../page/page-row.slint";
 import { PageDrag } from "../page/track-row.slint";
 import { PillButton, PlayButton } from "../widgets/buttons.slint";
 import { ListView } from "../widgets/list.slint";
 import { PagePlaceholder } from "../widgets/skeleton.slint";
+
+/// A round glow of `colour`, fading out from its centre.
+component Glow inherits Rectangle {
+    in property <length> size;
+    in property <color> colour;
+    in property <float> strength;
+    width: root.size;
+    height: root.size;
+    background: @radial-gradient(circle, Theme.tint(root.colour).with-alpha(root.strength) 0%, Theme.tint(root.colour).with-alpha(0) 70%);
+}
 
 export component PageView inherits Rectangle {
     in property <[RowItem]> rows;
@@ -18,6 +28,9 @@ export component PageView inherits Rectangle {
     in property <color> accent;
     property <color> tint: root.accent.alpha == 0 ? Theme.home-tint : root.accent;
     in property <string> nav-current;
+    /// Home's rows open with the greeting; `nav-current` changes before the rows
+    /// do. An empty model's row 0 is a default row, also of the greeting's kind.
+    property <bool> home: root.rows.length > 0 && root.rows[0].kind == RowKind.greeting;
     in-out property <length> page-scroll;
     in-out property <bool> sign-in-open;
 
@@ -44,12 +57,29 @@ export component PageView inherits Rectangle {
 
     Rectangle {
         y: root.page-scroll;
-        height: 420px;
-        background: @linear-gradient(180deg, Theme.tint(root.tint) 0%, Theme.panel 100%);
+        height: root.home ? 560px : 420px;
+        // Home's base is fainter, so its glows stand out of it.
+        background: @linear-gradient(180deg, Theme.tint(root.home ? root.tint.mix(Theme.panel, 0.35) : root.tint) 0%, Theme.panel 100%);
         animate background { duration: 500ms; }
         // Hidden under a header's blurred artwork, as it runs further down.
         opacity: root.rows[0].backdrop.width > 0 ? 0 : 1;
         animate opacity { duration: 400ms; }
+
+        // Two soft glows, the accent's and a violet's, after the icon's gradient.
+        if root.home: Glow {
+            x: root.width * 0.18 - self.width / 2;
+            y: -self.height / 2 + 40px;
+            size: 960px;
+            colour: Theme.accent;
+            strength: 0.26;
+        }
+        if root.home: Glow {
+            x: root.width * 0.82 - self.width / 2;
+            y: -self.height / 2 + 100px;
+            size: 820px;
+            colour: Theme.home-glow;
+            strength: 0.22;
+        }
     }
 
     // Beneath the page, and kept while the page fades in over it.
@@ -69,6 +99,7 @@ export component PageView inherits Rectangle {
             for row[i] in root.rows: PageRow {
                 data: row;
                 index: i;
+                home: root.home;
                 content-width: list.visible-width;
             }
         }

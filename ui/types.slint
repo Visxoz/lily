@@ -25,7 +25,7 @@ export struct CardItem {
     pinned: bool,
 }
 
-export enum RowKind { greeting, header, title, columns, track, carousel, grid, chips, top }
+export enum RowKind { greeting, header, title, columns, track, carousel, grid, chips, top, songs }
 
 /// One row of the virtualised page list.
 export struct RowItem {
@@ -60,6 +60,8 @@ export struct RowItem {
     show-album: bool,
     // card rows
     cards: [CardItem],
+    /// A song shelf's songs, in columns that scroll sideways.
+    tracks: [TrackItem],
     // where the row's items live in the page, for callbacks
     section: int,
     index: int,

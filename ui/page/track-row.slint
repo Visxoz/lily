@@ -46,6 +46,8 @@ export component TrackRow inherits Rectangle {
     in property <TrackItem> track;
     in property <bool> numbered;
     in property <bool> show-album;
+    /// In a song shelf: no number or duration, so playing and play show over the artwork.
+    in property <bool> compact;
     in property <int> section;
     in property <int> index;
     property <bool> playing: root.track.id != "" && Api.playing-id == root.track.id;
@@ -198,11 +200,13 @@ export component TrackRow inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 16px;
+        // A shelf's artwork lines up with the cards' above it, and its menu
+        // button stays clear of the shelf's arrow.
+        padding-left: root.compact ? 12px : 16px;
+        padding-right: root.compact ? 24px : 16px;
+        spacing: root.compact ? 8px : 16px;
 
-        Rectangle {
+        if !root.compact: Rectangle {
             width: 24px;
             if root.playing && !root.hot: Equalizer {
                 active: Api.is-playing;
@@ -231,6 +235,19 @@ export component TrackRow inherits Rectangle {
                 width: 40px;
                 height: 40px;
                 source: root.track.art;
+                // Dark in every look, as it lies over artwork.
+                if root.compact && (root.hot || root.playing): Rectangle {
+                    background: #00000099;
+                    if root.playing && !root.hot: Equalizer {
+                        active: Api.is-playing;
+                        color: Theme.on-colour;
+                    }
+                    if root.hot: Icon {
+                        path: root.playing && Api.is-playing ? Icons.pause : Icons.play;
+                        size: 20px;
+                        color: Theme.on-colour;
+                    }
+                }
             }
             VerticalLayout {
                 alignment: center;
@@ -296,7 +313,7 @@ export component TrackRow inherits Rectangle {
             }
         }
 
-        Text {
+        if !root.compact: Text {
             width: 44px;
             text: root.track.duration;
             color: Theme.text-secondary;

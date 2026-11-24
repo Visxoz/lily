@@ -4,11 +4,11 @@ use slint::{Image, Model, ModelRc, VecModel};
 
 use crate::app::{
     App,
-    browse::items::{card_item, track_row},
+    browse::items::{card_item, track_item, track_row},
     opaque, s,
 };
 use crate::{
-    CardItem, RowItem, RowKind,
+    CardItem, RowItem, RowKind, TrackItem,
     api::{self, CardLayout, Header, Page, QueueMode, Route, Section, Track},
     downloads::Downloads,
     images,
@@ -50,7 +50,8 @@ pub(in crate::app) fn track_list_page(
 /// Long enough for a frame or two to lay out a page's first rows.
 const RESEEK_AFTER: std::time::Duration = std::time::Duration::from_millis(60);
 
-type CardArt = (ModelRc<CardItem>, Vec<Option<String>>, u32);
+/// A model's items' artwork URLs, in its order, at an edge.
+type ModelArt<T> = (ModelRc<T>, Vec<Option<String>>, u32);
 
 /// Whether the page shown is still the one loaded as `generation`, so art
 /// for a page left behind is neither downloaded nor put in its rows, and the
@@ -66,6 +67,14 @@ fn card_edge(layout: &CardLayout) -> u32 {
     }
 }
 
+fn card_thumbs(cards: &[api::Card]) -> Vec<Option<String>> {
+    cards.iter().map(|c| c.thumb.clone()).collect()
+}
+
+fn track_thumbs(tracks: &[Track]) -> Vec<Option<String>> {
+    tracks.iter().map(|t| t.thumb.clone()).collect()
+}
+
 fn header_edge(header: Option<&Header>) -> u32 {
     match header {
         Some(h) if h.banner => images::BANNER,
@@ -76,10 +85,20 @@ fn header_edge(header: Option<&Header>) -> u32 {
 #[derive(Default)]
 struct Built {
     rows: Vec<RowItem>,
-    card_art: Vec<CardArt>,
+    card_art: Vec<ModelArt<CardItem>>,
+    track_art: Vec<ModelArt<TrackItem>>,
+    /// Home's titled song sections become shelves that scroll sideways.
+    shelves: bool,
 }
 
 impl Built {
+    fn new(route: &Route) -> Self {
+        Self {
+            shelves: *route == Route::Home,
+            ..Default::default()
+        }
+    }
+
     fn section(&mut self, section_index: usize, section: &Section, downloads: &Downloads) {
         let title = section.title();
         if !title.is_empty() {
@@ -90,6 +109,25 @@ impl Built {
             });
         }
         match section {
+            // A shelf makes all its rows, in view or not, so its art loads up
+            // front as a card row's does.
+            Section::Tracks { tracks, .. } if self.shelves && !title.is_empty() => {
+                let model = ModelRc::new(VecModel::from(
+                    tracks
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| track_item(t, i + 1, downloads.contains(&t.id)))
+                        .collect::<Vec<_>>(),
+                ));
+                self.track_art
+                    .push((model.clone(), track_thumbs(tracks), images::ROW));
+                self.rows.push(RowItem {
+                    kind: RowKind::Songs,
+                    tracks: model,
+                    section: section_index as i32,
+                    ..Default::default()
+                });
+            }
             Section::Tracks {
                 tracks, numbered, ..
             } => {
@@ -116,11 +154,8 @@ impl Built {
                 let model = ModelRc::new(VecModel::from(
                     cards.iter().map(|c| card_item(c, edge)).collect::<Vec<_>>(),
                 ));
-                self.card_art.push((
-                    model.clone(),
-                    cards.iter().map(|c| c.thumb.clone()).collect(),
-                    edge,
-                ));
+                self.card_art
+                    .push((model.clone(), card_thumbs(cards), edge));
                 self.rows.push(RowItem {
                     kind: match layout {
                         CardLayout::Carousel => RowKind::Carousel,
@@ -150,7 +185,7 @@ impl App {
             }
             (state.page_generation, state.route.clone())
         };
-        let mut built = Built::default();
+        let mut built = Built::new(&route);
 
         if route == Route::Home {
             built.rows.push(RowItem {
@@ -207,7 +242,12 @@ impl App {
         let more = page.more.is_some();
         self.state.borrow_mut().page = page;
         self.offer_edits();
-        let Built { rows, card_art } = built;
+        let Built {
+            rows,
+            card_art,
+            track_art,
+            ..
+        } = built;
         let restore = self.state.borrow_mut().restore_scroll.take();
         // Shown again in place, as a refresh does, the rows keep their model.
         // Any other page gets a new one, as Slint's ListView keeps where the old
@@ -237,7 +277,7 @@ impl App {
         }
 
         self.load_header_art(header_thumb, header_edge, generation);
-        self.load_card_art(card_art, generation);
+        self.load_art(card_art, track_art, generation);
         if more {
             self.complete_page(route, generation);
         }
@@ -271,7 +311,7 @@ impl App {
         });
     }
 
-    /// Loads the shown page's header and card art again, as the page first
+    /// Loads the shown page's header, card and shelf art again, as the page first
     /// did, once the window that let go of it is shown.
     pub(in crate::app) fn load_page_art(self: &Rc<Self>) {
         let (generation, thumb, edge) = {
@@ -280,23 +320,23 @@ impl App {
             let thumb = header.and_then(|h| h.thumb.clone());
             (state.page_generation, thumb, header_edge(header))
         };
-        let rows = self.rows();
-        let card_art: Vec<CardArt> = {
+        let (mut card_art, mut track_art) = (Vec::new(), Vec::new());
+        {
             let state = self.state.borrow();
-            rows.iter()
-                .filter(|row| row.cards.row_count() > 0)
-                .filter_map(|row| match state.page.sections.get(row.section as usize) {
-                    Some(Section::Cards { cards, layout, .. }) => Some((
-                        row.cards,
-                        cards.iter().map(|c| c.thumb.clone()).collect(),
-                        card_edge(layout),
-                    )),
-                    _ => None,
-                })
-                .collect()
-        };
+            for row in self.rows().iter() {
+                match state.page.sections.get(row.section as usize) {
+                    Some(Section::Cards { cards, layout, .. }) if row.cards.row_count() > 0 => {
+                        card_art.push((row.cards, card_thumbs(cards), card_edge(layout)));
+                    }
+                    Some(Section::Tracks { tracks, .. }) if row.kind == RowKind::Songs => {
+                        track_art.push((row.tracks, track_thumbs(tracks), images::ROW));
+                    }
+                    _ => {}
+                }
+            }
+        }
         self.load_header_art(thumb, edge, generation);
-        self.load_card_art(card_art, generation);
+        self.load_art(card_art, track_art, generation);
     }
 
     pub(in crate::app) fn find_row(&self, kind: RowKind) -> Option<usize> {
@@ -304,16 +344,32 @@ impl App {
             .find(|&i| self.rows().row_data(i).is_some_and(|r| r.kind == kind))
     }
 
-    fn load_card_art(self: &Rc<Self>, card_art: Vec<CardArt>, generation: u64) {
-        for (model, urls, edge) in card_art {
+    /// Loads card rows' and song shelves' artwork into their models.
+    fn load_art(
+        self: &Rc<Self>,
+        cards: Vec<ModelArt<CardItem>>,
+        tracks: Vec<ModelArt<TrackItem>>,
+        generation: u64,
+    ) {
+        self.load_model_art(cards, generation, |card, image| card.art = image);
+        self.load_model_art(tracks, generation, |track, image| track.art = image);
+    }
+
+    fn load_model_art<T: Clone + 'static>(
+        self: &Rc<Self>,
+        art: Vec<ModelArt<T>>,
+        generation: u64,
+        set: fn(&mut T, Image),
+    ) {
+        for (model, urls, edge) in art {
             for (i, url) in urls.into_iter().enumerate() {
                 let model = model.clone();
                 self.load_image_while(url, edge, on_page(generation), move |app, image| {
                     if on_page(generation)(app)
-                        && let Some(mut card) = model.row_data(i)
+                        && let Some(mut item) = model.row_data(i)
                     {
-                        card.art = image;
-                        model.set_row_data(i, card);
+                        set(&mut item, image);
+                        model.set_row_data(i, item);
                     }
                 });
             }
@@ -473,15 +529,20 @@ impl App {
         }
 
         if page.sections.len() > shown_sections {
-            let mut built = Built::default();
+            let mut built = Built::new(&route);
             let state = self.state.borrow();
             for (section_index, section) in page.sections.iter().enumerate().skip(shown_sections) {
                 built.section(section_index, section, &state.downloads);
             }
             drop(state);
-            let Built { rows, card_art } = built;
+            let Built {
+                rows,
+                card_art,
+                track_art,
+                ..
+            } = built;
             self.rows().extend(rows);
-            self.load_card_art(card_art, generation);
+            self.load_art(card_art, track_art, generation);
         }
 
         let more = page.more.is_some();

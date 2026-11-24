@@ -5,7 +5,7 @@ use crate::{
     images,
 };
 
-fn track_item(track: &Track, number: usize, downloaded: bool) -> TrackItem {
+pub(in crate::app) fn track_item(track: &Track, number: usize, downloaded: bool) -> TrackItem {
     TrackItem {
         id: s(&track.id),
         title: s(&track.title),

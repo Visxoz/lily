@@ -192,6 +192,18 @@ impl App {
                     std::mem::replace(&mut row.track.downloaded, downloaded) != downloaded
                 }
                 RowKind::Header => std::mem::replace(&mut row.downloaded, all) != all,
+                // Changed in the shelf's own model, so the row itself isn't.
+                RowKind::Songs => {
+                    for t in 0..row.tracks.row_count() {
+                        if let Some(mut track) = row.tracks.row_data(t) {
+                            let downloaded = state.downloads.contains(&track.id);
+                            if std::mem::replace(&mut track.downloaded, downloaded) != downloaded {
+                                row.tracks.set_row_data(t, track);
+                            }
+                        }
+                    }
+                    false
+                }
                 _ => false,
             };
             if changed {
