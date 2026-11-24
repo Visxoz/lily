@@ -218,6 +218,7 @@ impl App {
                 library_edits: HashSet::new(),
                 library_revision: 0,
                 library_generation: 0,
+                sleep: None,
             }),
             rows: RefCell::default(),
             rows_route: RefCell::default(),

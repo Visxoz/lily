@@ -55,6 +55,7 @@ impl App {
         on!(on_toggle_mute, |app| app.toggle_mute());
         on!(on_toggle_shuffle, |app| app.toggle_shuffle());
         on!(on_cycle_repeat, |app| app.cycle_repeat());
+        on!(on_set_sleep, |app, minutes| app.set_sleep(minutes));
         on!(on_queue_clicked, |app, index, control, shift| app
             .queue_clicked(index as usize, control, shift));
         on!(on_queue_move, |app, from, to| app

@@ -4,6 +4,7 @@
 pub(super) mod gapless;
 pub(super) mod premium_state;
 pub(super) mod resolve;
+pub(super) mod sleep;
 pub(super) mod smart_shuffle;
 pub(super) mod soak;
 pub(super) mod song_version;
@@ -274,7 +275,9 @@ impl App {
             }
             "ended" => {
                 self.state.borrow_mut().playback.failures = 0;
-                self.next(false);
+                if !self.sleep_at_end() {
+                    self.next(false);
+                }
             }
             "dropped" => self.connection_lost(message),
             // The player paused itself; the rest follows as for the user's pause.
@@ -450,6 +453,7 @@ impl App {
             ui.set_np_loading(stalled && buffered < 1.0);
             self.update_gapless(position);
         }
+        self.check_sleep();
         self.sync_mini();
     }
 }

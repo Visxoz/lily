@@ -2,7 +2,7 @@ import { Icons, Theme } from "../theme.slint";
 import { Api } from "../types.slint";
 import { Art } from "../widgets/art.slint";
 import { IconButton, PlayButton } from "../widgets/buttons.slint";
-import { MenuEntry, PopupMenu } from "../widgets/menu.slint";
+import { MenuDivider, MenuEntry, PopupMenu } from "../widgets/menu.slint";
 import { Slider } from "../widgets/slider.slint";
 import { Spinner } from "../widgets/spinner.slint";
 
@@ -34,6 +34,8 @@ export component PlayerBar inherits Rectangle {
     in property <bool> queue-active;
     in property <bool> rating-buttons;
     in property <bool> mini-open;
+    /// The sleep timer's minutes left, -1 for the end of the song, 0 for off.
+    in property <int> sleep-minutes;
     in-out property <bool> full-player;
 
     callback toggle-play();
@@ -48,6 +50,7 @@ export component PlayerBar inherits Rectangle {
     callback np-go-album();
     callback open-panel(tab: int);
     callback toggle-mini-player();
+    callback set-sleep(minutes: int);
 
     pure function fmt(secs: float) -> string {
         if secs < 0 {
@@ -112,6 +115,28 @@ export component PlayerBar inherits Rectangle {
             text: "Copy link";
             icon: Icons.link;
             activated => { Api.card-action("copy-link", "song", Api.playing-id); }
+        }
+    }
+
+    // Above the bar, its right edge under the button's.
+    sleep-menu := PopupMenu {
+        x: sleep-button.absolute-position.x - root.absolute-position.x + sleep-button.width - self.width;
+        y: -self.height - 4px;
+        if root.sleep-minutes != 0: MenuEntry {
+            text: root.sleep-minutes < 0 ? "Turn off (end of song)" : "Turn off (" + root.sleep-minutes + " min left)";
+            icon: Icons.close;
+            activated => { root.set-sleep(0); }
+        }
+        if root.sleep-minutes != 0: MenuDivider { }
+        for minutes in [5, 15, 30, 45, 60, 90]: MenuEntry {
+            text: minutes + " minutes";
+            activated => { root.set-sleep(minutes); }
+        }
+        MenuEntry {
+            text: "End of song";
+            icon: root.sleep-minutes < 0 ? Icons.check : "";
+            active: root.sleep-minutes < 0;
+            activated => { root.set-sleep(-1); }
         }
     }
 
@@ -322,6 +347,12 @@ export component PlayerBar inherits Rectangle {
             icon: Api.playing-downloaded ? Icons.downloaded : Icons.download;
             active: Api.playing-downloaded;
             clicked => { Api.download(Api.playing-id, false); }
+        }
+
+        sleep-button := MinorButton {
+            icon: Icons.bedtime;
+            active: root.sleep-minutes != 0;
+            clicked => { sleep-menu.show(); }
         }
 
         MinorButton {

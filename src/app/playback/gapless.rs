@@ -1,6 +1,6 @@
 use std::{rc::Rc, time::Instant};
 
-use crate::app::{App, State};
+use crate::app::{App, State, playback::sleep::Sleep};
 use crate::{api::Track, audio::Transition, settings::Settings};
 
 /// Time for the next stream to start downloading and its decoder to open. A
@@ -32,6 +32,11 @@ impl App {
     pub(in crate::app) fn change_transition(&self, change: impl FnOnce(&mut Settings)) {
         self.update_settings(change);
         // A track queued with the old setting is queued again.
+        self.unqueue_next();
+    }
+
+    /// Drops the track queued in the player, keeping its stream as prefetched.
+    pub(in crate::app) fn unqueue_next(&self) {
         self.state.borrow_mut().playback.unqueue();
         self.player.clear_next();
     }
@@ -51,6 +56,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|(id, ..)| next != Some(id.as_str()));
             let near_end = playback.started
+                && !matches!(state.sleep, Some(Sleep::EndOfSong))
                 && playback.duration > 0.0
                 && playback.duration - position <= lead
                 && (playback.queued.is_none() || stale);
@@ -65,8 +71,7 @@ impl App {
             (stale, due, playback.generation)
         };
         if stale {
-            self.state.borrow_mut().playback.unqueue();
-            self.player.clear_next();
+            self.unqueue_next();
         }
         let Some(next_id) = due else {
             return;
@@ -85,6 +90,7 @@ impl App {
             let still_next = {
                 let state = app.state.borrow();
                 state.playback.generation == generation
+                    && !matches!(state.sleep, Some(Sleep::EndOfSong))
                     && state.queue.peek_next().is_some_and(|t| t.id == next_id)
             };
             match result {

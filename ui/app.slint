@@ -108,6 +108,7 @@ export component AppWindow inherits Window {
     in property <int> repeat-mode;
     in-out property <bool> full-player <=> root.full-screen;
     in property <bool> mini-open;
+    in property <int> sleep-minutes;
     /// The queue's drawer over the full player's lyrics.
     out property <bool> queue-drawer;
     /// The queue entry that plays after this one, as `Queue::next_index`
@@ -237,6 +238,7 @@ export component AppWindow inherits Window {
     callback lyric-clicked(index: int);
     callback full-player-changed();
     callback toggle-mini-player();
+    callback set-sleep(minutes: int);
     callback sidebar-changed(collapsed: bool);
     callback np-go-artist();
     callback np-go-album();
@@ -560,6 +562,8 @@ export component AppWindow inherits Window {
                 full-player <=> root.full-player;
                 mini-open: root.mini-open;
                 toggle-mini-player => { root.toggle-mini-player(); }
+                sleep-minutes: root.sleep-minutes;
+                set-sleep(minutes) => { root.set-sleep(minutes); }
                 queue-active: root.queue-shown;
                 lyrics-active: root.full-player ? !root.queue-drawer : root.lyrics-shown;
                 toggle-play => { root.toggle-play(); }
