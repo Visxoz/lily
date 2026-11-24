@@ -79,6 +79,8 @@ pub struct App {
     /// The page's and the queue's row artwork.
     row_art: RowArt,
     queue_art: RowArt,
+    /// The page's and the queue's artwork is let go while the window is hidden.
+    art_hidden: Cell<bool>,
     tick: Timer,
     eq_timer: Timer,
     /// Lights up the next lyric line as it starts, between ticks.
@@ -226,6 +228,7 @@ impl App {
             selection: Cell::new(now_playing::queue_panel::Selection::default()),
             row_art: RowArt::default(),
             queue_art: RowArt::default(),
+            art_hidden: Cell::new(false),
             tick: Timer::default(),
             eq_timer: Timer::default(),
             lyric_timer: Timer::default(),

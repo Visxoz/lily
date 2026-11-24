@@ -152,7 +152,9 @@ impl App {
             }
             return;
         }
-        let wanted = move |app: &Rc<Self>| app.ui().get_full_player() && app.is_current(&id);
+        let wanted = move |app: &Rc<Self>| {
+            app.ui().get_full_player() && app.is_current(&id) && !app.art_hidden.get()
+        };
         self.load_image_while(url, images::COVER, wanted.clone(), move |app, image| {
             if wanted(app) {
                 app.ui().set_np_cover(image);

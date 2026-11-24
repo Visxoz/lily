@@ -50,12 +50,27 @@ pub(in crate::app) fn track_list_page(
 /// Long enough for a frame or two to lay out a page's first rows.
 const RESEEK_AFTER: std::time::Duration = std::time::Duration::from_millis(60);
 
-type CardArt = (Rc<VecModel<CardItem>>, Vec<Option<String>>, u32);
+type CardArt = (ModelRc<CardItem>, Vec<Option<String>>, u32);
 
 /// Whether the page shown is still the one loaded as `generation`, so art
-/// for a page left behind is neither downloaded nor put in its rows.
+/// for a page left behind is neither downloaded nor put in its rows, and the
+/// window is shown, as hidden it holds none.
 fn on_page(generation: u64) -> impl Fn(&Rc<App>) -> bool + Copy {
-    move |app| app.state.borrow().page_generation == generation
+    move |app| app.state.borrow().page_generation == generation && !app.art_hidden.get()
+}
+
+fn card_edge(layout: &CardLayout) -> u32 {
+    match layout {
+        CardLayout::Top => images::TOP,
+        _ => images::CARD,
+    }
+}
+
+fn header_edge(header: Option<&Header>) -> u32 {
+    match header {
+        Some(h) if h.banner => images::BANNER,
+        _ => images::HEADER,
+    }
 }
 
 #[derive(Default)]
@@ -97,15 +112,12 @@ impl Built {
                 }
             }
             Section::Cards { cards, layout, .. } => {
-                let edge = match layout {
-                    CardLayout::Top => images::TOP,
-                    _ => images::CARD,
-                };
-                let model = Rc::new(VecModel::from(
+                let edge = card_edge(layout);
+                let model = ModelRc::new(VecModel::from(
                     cards.iter().map(|c| card_item(c, edge)).collect::<Vec<_>>(),
                 ));
                 self.card_art.push((
-                    Rc::clone(&model),
+                    model.clone(),
                     cards.iter().map(|c| c.thumb.clone()).collect(),
                     edge,
                 ));
@@ -116,7 +128,7 @@ impl Built {
                         CardLayout::Chips => RowKind::Chips,
                         CardLayout::Top => RowKind::Top,
                     },
-                    cards: ModelRc::from(model),
+                    cards: model,
                     section: section_index as i32,
                     ..Default::default()
                 });
@@ -148,10 +160,7 @@ impl App {
             });
         }
 
-        let header_edge = match &page.header {
-            Some(h) if h.banner => images::BANNER,
-            _ => images::HEADER,
-        };
+        let header_edge = header_edge(page.header.as_ref());
         let state = self.state.borrow();
         let downloads = &state.downloads;
         if let Some(header) = &page.header {
@@ -227,26 +236,67 @@ impl App {
             });
         }
 
+        self.load_header_art(header_thumb, header_edge, generation);
+        self.load_card_art(card_art, generation);
+        if more {
+            self.complete_page(route, generation);
+        }
+    }
+
+    fn load_header_art(self: &Rc<Self>, thumb: Option<String>, edge: u32, generation: u64) {
         // Only called with an image, so with a URL.
-        let url = header_thumb.clone().unwrap_or_default();
-        self.load_image(header_thumb, header_edge, move |app, image| {
-            if app.state.borrow().page_generation != generation {
+        let url = thumb.clone().unwrap_or_default();
+        self.load_image_while(thumb, edge, on_page(generation), move |app, image| {
+            // Shown again while the next page loads, the old one's header is
+            // reloaded under the new page's generation.
+            let shown = app
+                .state
+                .borrow()
+                .page
+                .header
+                .as_ref()
+                .and_then(|h| h.thumb.clone());
+            if !on_page(generation)(app) || shown.as_deref() != Some(url.as_str()) {
                 return;
             }
-            if let Some(color) = images::accent(&url, header_edge) {
+            if let Some(color) = images::accent(&url, edge) {
                 app.ui().set_accent(color);
             }
             if let Some(index) = app.find_row(RowKind::Header) {
                 let mut row = app.rows().row_data(index).unwrap_or_default();
                 row.art = image;
-                row.backdrop = images::backdrop(&url, header_edge).unwrap_or_default();
+                row.backdrop = images::backdrop(&url, edge).unwrap_or_default();
                 app.rows().set_row_data(index, row);
             }
         });
+    }
+
+    /// Loads the shown page's header and card art again, as the page first
+    /// did, once the window that let go of it is shown.
+    pub(in crate::app) fn load_page_art(self: &Rc<Self>) {
+        let (generation, thumb, edge) = {
+            let state = self.state.borrow();
+            let header = state.page.header.as_ref();
+            let thumb = header.and_then(|h| h.thumb.clone());
+            (state.page_generation, thumb, header_edge(header))
+        };
+        let rows = self.rows();
+        let card_art: Vec<CardArt> = {
+            let state = self.state.borrow();
+            rows.iter()
+                .filter(|row| row.cards.row_count() > 0)
+                .filter_map(|row| match state.page.sections.get(row.section as usize) {
+                    Some(Section::Cards { cards, layout, .. }) => Some((
+                        row.cards,
+                        cards.iter().map(|c| c.thumb.clone()).collect(),
+                        card_edge(layout),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        };
+        self.load_header_art(thumb, edge, generation);
         self.load_card_art(card_art, generation);
-        if more {
-            self.complete_page(route, generation);
-        }
     }
 
     pub(in crate::app) fn find_row(&self, kind: RowKind) -> Option<usize> {
@@ -257,9 +307,11 @@ impl App {
     fn load_card_art(self: &Rc<Self>, card_art: Vec<CardArt>, generation: u64) {
         for (model, urls, edge) in card_art {
             for (i, url) in urls.into_iter().enumerate() {
-                let model = Rc::clone(&model);
-                self.load_image_while(url, edge, on_page(generation), move |_, image| {
-                    if let Some(mut card) = model.row_data(i) {
+                let model = model.clone();
+                self.load_image_while(url, edge, on_page(generation), move |app, image| {
+                    if on_page(generation)(app)
+                        && let Some(mut card) = model.row_data(i)
+                    {
                         card.art = image;
                         model.set_row_data(i, card);
                     }

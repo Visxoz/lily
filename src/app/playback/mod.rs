@@ -321,7 +321,7 @@ impl App {
             .queue
             .peek_next()
             .and_then(|t| t.thumb.clone());
-        if self.ui().get_full_player() {
+        if self.ui().get_full_player() && !self.art_hidden.get() {
             self.load_image(art.clone(), images::COVER, |_, _| {});
         }
         self.load_image(art, images::PLAYER, |_, _| {});

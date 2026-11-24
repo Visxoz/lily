@@ -59,9 +59,8 @@ pub fn set_scale(scale: f32) {
 }
 
 /// Shrinks the cache to `HIDDEN_BUDGET` while the window is hidden, and lets
-/// it grow again once shown. Images on the shown page and in the queue stay,
-/// as their models hold them, so only what Back or a rebuild would reuse goes,
-/// to be read from disk again.
+/// it grow again once shown. `App::hide_art` lets the page's and the queue's
+/// models go of theirs first, so they go too, to be read from disk again.
 pub fn set_hidden(hidden: bool) {
     CACHE.with(|c| {
         let mut cache = c.borrow_mut();

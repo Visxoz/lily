@@ -372,7 +372,7 @@ fn main() {
             if !minimized {
                 watch_app.cancel_hide();
                 if trimmed.replace(false) {
-                    images::set_hidden(false);
+                    watch_app.hide_art(false);
                 }
             } else if !was {
                 minimized_at.set(std::time::Instant::now());
@@ -383,11 +383,11 @@ fn main() {
             } else if watch_app.take_hide_pending() {
                 let _ = ui.hide();
                 trimmed.set(true);
-                images::set_hidden(true);
+                watch_app.hide_art(true);
             } else if !trimmed.get() && minimized_at.get().elapsed() >= TRIM_ARTWORK_AFTER {
                 // Not at once, so a quick look elsewhere doesn't cost Back its art.
                 trimmed.set(true);
-                images::set_hidden(true);
+                watch_app.hide_art(true);
             }
             if was && !minimized {
                 // Again after the restore animation, which can swallow frames.

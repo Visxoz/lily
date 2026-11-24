@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use slint::{Image, Timer};
+use slint::{Image, Model, Timer};
 
 use super::App;
 use crate::images;
@@ -30,12 +30,23 @@ pub(super) struct RowArt {
     last: Cell<usize>,
     /// Rows given art, oldest first.
     kept: RefCell<VecDeque<usize>>,
+    /// Rows that asked while the window was hidden, to load once shown, as a
+    /// row asks only as its art goes.
+    held: RefCell<Vec<usize>>,
 }
 
 impl RowArt {
-    /// Forgets the rows given art, as their model was rebuilt.
+    /// Forgets the rows given art, as their model was rebuilt. Held rows
+    /// stay, as their loaders look again at what each row holds.
     pub(super) fn reset(&self) {
         self.kept.borrow_mut().clear();
+    }
+
+    fn hold(&self, row: usize) {
+        let mut held = self.held.borrow_mut();
+        if !held.contains(&row) {
+            held.push(row);
+        }
     }
 
     /// Notes `row` given art, and returns the rows whose art to let go.
@@ -115,6 +126,16 @@ impl App {
         apply: impl FnOnce(&Rc<Self>, Image) + 'static,
         release: fn(&Rc<Self>, usize),
     ) {
+        // Hidden, the row is held, and loaded once shown.
+        let shown = move |app: &Rc<Self>| {
+            if app.art_hidden.get() {
+                list(app).hold(row);
+            }
+            !app.art_hidden.get()
+        };
+        if !shown(self) {
+            return;
+        }
         let ask = list(self).asks.get() + 1;
         list(self).asks.set(ask);
         list(self).last.set(row);
@@ -122,9 +143,9 @@ impl App {
         self.load_image_while(
             url,
             images::ROW,
-            move |app| list(app).asks.get() - ask < RECENT_ASKS && still(app),
+            move |app| list(app).asks.get() - ask < RECENT_ASKS && shown(app) && still(app),
             move |app, image| {
-                if wants(app) {
+                if shown(app) && wants(app) {
                     apply(app, image);
                     for old in list(app).keep(row) {
                         release(app, old);
@@ -133,6 +154,62 @@ impl App {
             },
         );
     }
+
+    /// Lets go of the page's and the queue's artwork while the window is
+    /// hidden, as their models would otherwise hold it past the cache's
+    /// budget, and loads it again once shown. The player's stays, as the
+    /// mini player shows it.
+    pub fn hide_art(self: &Rc<Self>, hidden: bool) {
+        if self.art_hidden.replace(hidden) == hidden {
+            return;
+        }
+        if hidden {
+            self.row_art.reset();
+            self.queue_art.reset();
+            let rows = self.rows();
+            for i in 0..rows.row_count() {
+                let Some(mut row) = rows.row_data(i) else {
+                    continue;
+                };
+                for c in 0..row.cards.row_count() {
+                    if let Some(mut card) = row.cards.row_data(c).filter(|c| has(&c.art)) {
+                        card.art = Image::default();
+                        row.cards.set_row_data(c, card);
+                    }
+                }
+                if has(&row.art) || has(&row.backdrop) || has(&row.track.art) {
+                    row.art = Image::default();
+                    row.backdrop = Image::default();
+                    row.track.art = Image::default();
+                    rows.set_row_data(i, row);
+                }
+            }
+            for i in 0..self.queue_model.row_count() {
+                if let Some(mut item) = self.queue_model.row_data(i).filter(|q| has(&q.art)) {
+                    item.art = Image::default();
+                    self.queue_model.set_row_data(i, item);
+                }
+            }
+            self.ui().set_np_cover(Image::default());
+            images::set_hidden(true);
+        } else {
+            images::set_hidden(false);
+            for row in self.row_art.held.take() {
+                self.load_row_art(row);
+            }
+            for row in self.queue_art.held.take() {
+                self.load_queue_art(row);
+            }
+            self.load_page_art();
+            if self.ui().get_full_player() {
+                self.load_cover();
+            }
+        }
+    }
+}
+
+fn has(image: &Image) -> bool {
+    image.size().width > 0
 }
 
 #[cfg(test)]
