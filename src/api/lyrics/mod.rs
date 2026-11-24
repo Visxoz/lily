@@ -110,7 +110,9 @@ async fn within<T>(
 /// Another site's lyrics agree with YouTube's, always the recording playing,
 /// in mostly the same words in time, or stand where YouTube has none.
 fn checked(other: &Lyrics, own: Option<&matching::Reference>) -> bool {
-    other.lines.len() <= formats::MAX_LINES && own.is_none_or(|own| own.agrees(other))
+    other.lines.len() <= formats::MAX_LINES
+        && other.words.iter().map(Vec::len).sum::<usize>() <= formats::MAX_WORDS
+        && own.is_none_or(|own| own.agrees(other))
 }
 
 /// Word timing, Apple Music's kind first; then timed lines, Apple Music's

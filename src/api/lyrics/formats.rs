@@ -13,6 +13,8 @@ use super::{Lyrics, Word};
 
 /// More lines than any song has, which the panel would build every one of.
 pub(super) const MAX_LINES: usize = 2000;
+/// Likewise for words, each of which the panel draws as its own text.
+pub(super) const MAX_WORDS: usize = 10_000;
 
 /// Apple Music's TTML, word timed or line timed; `None` when the XML doesn't parse or holds no lines.
 pub(super) fn ttml(text: &str, source: &str) -> Option<Lyrics> {

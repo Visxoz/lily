@@ -77,7 +77,12 @@ pub fn diag(line: impl AsRef<str>) {
         .truncate(truncate)
         .open(&path);
     if let Ok(mut file) = file {
-        let _ = writeln!(file, "[{}] {}", unix_secs(), line.as_ref());
+        let _ = writeln!(
+            file,
+            "[{}] {}",
+            unix_secs(),
+            crate::logger::redact(line.as_ref())
+        );
     }
     log::info!("{}", line.as_ref());
 }

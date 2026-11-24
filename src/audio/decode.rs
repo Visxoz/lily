@@ -93,6 +93,10 @@ impl Decoder {
                 .make_audio_decoder(&params, &AudioDecoderOptions::default())
                 .map_err(|e| format!("unsupported codec: {e}"))?;
             let rate = params.sample_rate.ok_or("stream has no sample rate")?;
+            // A file's own rate sizes buffers, so a crafted one could ask for gigabytes.
+            if !(8_000..=384_000).contains(&rate) {
+                return Err(format!("unsupported sample rate: {rate} Hz"));
+            }
             (
                 Codec::Symphonia {
                     decoder,

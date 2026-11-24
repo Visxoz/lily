@@ -4,7 +4,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
-    os::windows::io::AsRawHandle,
+    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
     thread,
     time::{Duration, Instant},
 };
@@ -12,7 +12,9 @@ use std::{
 use discord_rich_presence::activity::Activity;
 use serde::Serialize;
 use serde_json::Value;
-use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+use windows_sys::Win32::{
+    Storage::FileSystem::SECURITY_IDENTIFICATION, System::Pipes::PeekNamedPipe,
+};
 
 /// Discord answers within milliseconds when it is answering at all.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,6 +62,8 @@ impl Ipc {
                 OpenOptions::new()
                     .read(true)
                     .write(true)
+                    // A squatter's pipe must not be able to impersonate the user.
+                    .security_qos_flags(SECURITY_IDENTIFICATION)
                     .open(format!(r"\\?\pipe\discord-ipc-{i}"))
                     .ok()
             })

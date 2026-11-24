@@ -119,8 +119,19 @@ fn newer(release: Release, current: &str, kind: Kind) -> Result<Option<Update>, 
         Kind::Installed => "_x64-setup.exe",
         Kind::Portable => "_x64-portable.exe",
     };
-    let find =
-        |matches: &dyn Fn(&str) -> bool| release.assets.iter().find(|a| matches(&a.name)).cloned();
+    // The redirect policy checks only redirects, and the name becomes a path.
+    let sound = |a: &Asset| {
+        !a.name.contains(['/', '\\', ':'])
+            && url::Url::parse(&a.browser_download_url)
+                .is_ok_and(|url| crate::http::within(&url, DOMAINS))
+    };
+    let find = |matches: &dyn Fn(&str) -> bool| {
+        release
+            .assets
+            .iter()
+            .find(|a| matches(&a.name) && sound(a))
+            .cloned()
+    };
     let asset =
         find(&|name| name.ends_with(suffix)).ok_or("the release has no build for this copy")?;
     let sums = find(&|name| name == SUMS).ok_or("the release has no checksums")?;
@@ -303,6 +314,12 @@ mod tests {
             newer(release("v0.2.0", &ASSETS[..2]), "0.1.2", Kind::Installed).is_err(),
             "no checksums, no update"
         );
+        let mut elsewhere = release("v0.2.0", ASSETS);
+        elsewhere.assets[1].browser_download_url = "https://example.com/setup.exe".into();
+        assert!(newer(elsewhere, "0.1.2", Kind::Installed).is_err());
+        let mut escaping = release("v0.2.0", ASSETS);
+        escaping.assets[1].name = r"..\lily_0.2.0_x64-setup.exe".into();
+        assert!(newer(escaping, "0.1.2", Kind::Installed).is_err());
     }
 
     #[test]

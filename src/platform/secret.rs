@@ -99,6 +99,10 @@ impl rustypipe::cache::CacheStorage for EncryptedStorage {
     fn write(&self, data: &str) {
         if let Err(e) = write(&self.path, data) {
             log::warn!("could not save rustypipe's cache: {e}");
+            // Signing out: a stale copy would bring the removed cookie back.
+            if !data.contains("\"auth_cookie\"") {
+                let _ = std::fs::remove_file(&self.path);
+            }
         }
     }
 

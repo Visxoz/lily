@@ -296,10 +296,6 @@ async fn fetch(
             .await
             .ok()?;
     }
-    if !crate::http::allowed(&url) {
-        log::debug!("skipped artwork from a host YouTube does not use");
-        return None;
-    }
     // googleusercontent renders any size, so ask for the pixels drawn rather
     // than download a larger rendition and scale it down. Banners keep the
     // wide rendition they came with, as a square size would crop them.
@@ -308,6 +304,10 @@ async fn fetch(
     } else {
         crate::api::resize_thumb(&url, pixels)
     };
+    if !crate::http::allowed(&url) {
+        log::debug!("skipped artwork from a host YouTube does not use");
+        return None;
+    }
     rt.spawn(async move {
         let _permit = permit;
         let kept = disk_dir().join(disk_name(&url));

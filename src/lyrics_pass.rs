@@ -8,7 +8,7 @@ use serde::Deserialize;
 use slint::{ComponentHandle, Timer, TimerMode};
 use url::Url;
 use wry::{
-    NewWindowResponse, Rect, WebView,
+    NewWindowResponse, PermissionResponse, Rect, WebView,
     dpi::{LogicalPosition, LogicalSize},
     http::Request,
 };
@@ -75,6 +75,7 @@ impl Check {
                     Url::parse(&url).is_ok_and(|url| is_hub(Some(url.scheme()), url.host_str()))
                 })
                 .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+                .with_permission_handler(|_| PermissionResponse::Deny)
                 .build_as_child(&ui.window().window_handle())
                 .map_err(|e| e.to_string())?;
         let limit = Timer::default();

@@ -55,6 +55,14 @@ foreach ($c in $crates) {
         $crate = Join-Path $staging 'crate.tar.gz'
         Write-Host "Fetching $name $version"
         Invoke-WebRequest "https://static.crates.io/crates/$name/$name-$version.crate" -OutFile $crate
+        # Path patches get no checksum in Cargo.lock, so check the index's as Cargo would.
+        $index = (Invoke-WebRequest "https://index.crates.io/$($name.Substring(0, 2))/$($name.Substring(2, 2))/$name" -UseBasicParsing).Content
+        $entry = $index -split "`n" | Where-Object { $_.Contains("`"vers`":`"$version`"") } |
+            ForEach-Object { $_ | ConvertFrom-Json }
+        if (-not $entry) { throw "$name $version is not in the crates.io index" }
+        if ((Get-FileHash $crate -Algorithm SHA256).Hash -ne $entry.cksum) {
+            throw "$name $version does not match its crates.io checksum"
+        }
         tar -xzf $crate -C $staging
         if ($LASTEXITCODE -ne 0) { throw "could not unpack $name" }
         $source = Join-Path $staging "$name-$version"

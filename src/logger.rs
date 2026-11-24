@@ -174,7 +174,7 @@ fn write(mut sink: MutexGuard<Option<Sink>>, line: &str) {
 
 /// Cuts every URL down to its host, as paths and queries carry stream
 /// signatures and IDs, and a proxy's address its password.
-fn redact(line: &str) -> String {
+pub fn redact(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(at) = rest.find("://") {
