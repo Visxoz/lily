@@ -6,7 +6,7 @@ use rustypipe::{
 
 use super::{
     Api, Card, CardKind, CardLayout, Header, More, MoreTracks, PLAYLIST_LIMIT, Page, QueueMode,
-    Result, Route, Section,
+    Result, Route, SHELF_SONGS, Section,
     convert::{
         CARD_THUMB, HEADER_THUMB, ROW_THUMB, album_card, album_type, artist_card, artist_refs,
         card_section, genre_card, join_artists, pick_thumb, playlist_card, playlist_tracks,
@@ -128,7 +128,7 @@ impl Api {
         let mut sections = Vec::new();
         sections.extend(track_section(
             "Trending",
-            trending.into_iter().take(10).collect(),
+            trending.into_iter().take(SHELF_SONGS).collect(),
             QueueMode::Section,
         ));
         sections.extend(card_section(

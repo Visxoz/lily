@@ -19,6 +19,8 @@ export global Layout {
     /// The least width that fits the buttons beside the artwork.
     out property <length> inline-actions-from: 720px;
     out property <length> top-height: 236px;
+    /// Home's date and greeting.
+    out property <length> greeting-height: 108px;
     /// A song shelf's columns: songs in each, and the least width of one.
     out property <int> song-rows: 4;
     out property <length> song-width: 340px;
@@ -75,7 +77,7 @@ export global Layout {
 export global Rows {
     public pure function height(row: RowItem, inner: length) -> length {
         if row.kind == RowKind.greeting {
-            return 76px;
+            return Layout.greeting-height;
         }
         if row.kind == RowKind.header {
             return Layout.header-art-height(row) + (Layout.header-actions(row, inner) ? Layout.actions-height : 8px);

@@ -27,6 +27,8 @@ pub use model::*;
 
 /// Longest playlist loaded in one go.
 const PLAYLIST_LIMIT: usize = 500;
+/// Most songs in a Home song shelf: five columns.
+const SHELF_SONGS: usize = 20;
 const VIDEO_ID_LEN: usize = 11;
 
 pub type Result<T> = std::result::Result<T, String>;

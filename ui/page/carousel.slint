@@ -84,8 +84,9 @@ export component SongShelf {
     in property <[TrackItem]> tracks;
     in property <int> section;
     property <int> columns: ceil(root.tracks.length / Layout.song-rows);
-    /// Whole columns fill the width, so an arrow pages by whole columns.
-    property <int> shown: max(1, floor((root.width + Layout.song-gap) / (Layout.song-width + Layout.song-gap)));
+    /// Whole columns fill the width, so an arrow pages by whole columns; too
+    /// few to fill it widen.
+    property <int> shown: max(1, min(root.columns, floor((root.width + Layout.song-gap) / (Layout.song-width + Layout.song-gap))));
     property <length> column-width: (root.width - (root.shown - 1) * Layout.song-gap) / root.shown;
     property <length> step: root.column-width + Layout.song-gap;
     property <int> last-first: max(0, root.columns - root.shown);

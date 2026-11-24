@@ -137,7 +137,7 @@ impl Feed {
             }
         }
         // List shelves such as Quick picks play with a radio after them, as
-        // YouTube Music does, rather than the shelf's ten on their own.
+        // YouTube Music does, rather than the shelf's songs on their own.
         for section in &mut out {
             if let Section::Tracks { mode, .. } = section {
                 *mode = QueueMode::Radio;

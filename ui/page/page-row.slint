@@ -28,14 +28,34 @@ export component PageRow {
     init => { root.ask-art(); }
     changed art-key => { root.ask-art(); }
 
-    if root.data.kind == RowKind.greeting: Text {
+    // The date over the greeting, as a header's label.
+    if root.data.kind == RowKind.greeting: VerticalLayout {
         x: Theme.page-padding;
-        y: 28px;
-        text: root.data.title;
-        font-size: 32px;
-        font-weight: 800;
-        font-family: Theme.display-font;
-        color: Theme.text;
+        y: 24px;
+        width: root.inner;
+        alignment: start;
+        spacing: 2px;
+        Text {
+            text: root.data.label.to-uppercase();
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            color: Theme.text-secondary;
+        }
+
+        // At its own width, so the gradient spans just the words.
+        HorizontalLayout {
+            alignment: start;
+            Text {
+                text: root.data.title;
+                font-size: 48px;
+                font-weight: 800;
+                font-family: Theme.display-font;
+                letter-spacing: -0.96px;
+                // A soft touch of the accent at the end.
+                color: @linear-gradient(90deg, Theme.text 40%, Theme.accent.mix(Theme.text, 0.55) 100%);
+            }
+        }
     }
     if root.data.kind == RowKind.header: PageHeader {
         x: Theme.page-padding;

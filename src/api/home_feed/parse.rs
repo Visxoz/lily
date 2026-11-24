@@ -5,12 +5,9 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::api::{
-    ArtistRef, Card, CardKind, CardLayout, QueueMode, Section, Track,
+    ArtistRef, Card, CardKind, CardLayout, QueueMode, SHELF_SONGS, Section, Track,
     convert::{CARD_THUMB, ROW_THUMB, card_section, fit_thumb, track_section},
 };
-
-/// Longest list shelf shown, such as Quick picks.
-const LIST_LIMIT: usize = 10;
 
 // YouTube leaves out fields a renderer lacks, so every struct defaults. Shelves
 // and items are parsed one by one, so one in an odd shape is skipped, not fatal.
@@ -429,7 +426,7 @@ impl Shelf {
         let mut cards = Vec::new();
         for item in each::<ShelfItem>(&self.contents) {
             if let Some(list) = item.music_responsive_list_item_renderer {
-                if tracks.len() < LIST_LIMIT {
+                if tracks.len() < SHELF_SONGS {
                     tracks.extend(list.track());
                 }
             } else if let Some(two_row) = item.music_two_row_item_renderer {

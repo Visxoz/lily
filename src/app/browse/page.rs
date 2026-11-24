@@ -188,9 +188,11 @@ impl App {
         let mut built = Built::new(&route);
 
         if route == Route::Home {
+            let (date, greeting) = greeting();
             built.rows.push(RowItem {
                 kind: RowKind::Greeting,
-                title: s(greeting()),
+                label: s(&date),
+                title: s(greeting),
                 ..Default::default()
             });
         }
@@ -573,8 +575,11 @@ impl App {
     }
 }
 
-fn greeting() -> &'static str {
-    greeting_for(crate::app::local_now().hour())
+/// The date, as "Tuesday 24 November", and the hour's greeting.
+fn greeting() -> (String, &'static str) {
+    let now = crate::app::local_now();
+    let date = format!("{} {} {}", now.weekday(), now.day(), now.month());
+    (date, greeting_for(now.hour()))
 }
 
 fn greeting_for(hour: u8) -> &'static str {
