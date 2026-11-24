@@ -21,6 +21,10 @@ pub struct Lyrics {
     /// Each line's words when sung word by word, else empty; a line may still
     /// have none.
     pub words: Vec<Vec<Word>>,
+    /// Each line's translation, `""` where it has none; empty without any.
+    pub translations: Vec<String>,
+    /// Each line in Latin letters, likewise.
+    pub romanised: Vec<String>,
     /// Where they come from, such as "Source: Musixmatch".
     pub source: String,
 }
@@ -166,6 +170,7 @@ mod tests {
                 Vec::new()
             },
             source: source.into(),
+            ..Lyrics::default()
         }
     }
 

@@ -9,7 +9,7 @@ use tokio::task::AbortHandle;
 
 use super::super::{App, TICK, window};
 use crate::{
-    LyricLine, LyricWord, LyricsClock,
+    LyricLine, LyricWord, LyricsClock, LyricsExtras,
     api::{self, Track, lyrics::hub},
     lyrics_pass,
 };
@@ -178,8 +178,11 @@ impl App {
         } else {
             &[]
         };
+        let extra = |lines: &[String], i: usize| lines.get(i).map(Into::into).unwrap_or_default();
         let lines = lyrics.lines.iter().enumerate().map(|(i, text)| LyricLine {
             text: text.into(),
+            translation: extra(&lyrics.translations, i),
+            romanised: extra(&lyrics.romanised, i),
             words: words
                 .get(i)
                 .filter(|words| !words.is_empty())
@@ -193,6 +196,9 @@ impl App {
                 .unwrap_or_default(),
         });
         ui.set_lyrics(ModelRc::new(VecModel::from_iter(lines)));
+        let extras = ui.global::<LyricsExtras>();
+        extras.set_has_translation(!lyrics.translations.is_empty());
+        extras.set_has_romanisation(!lyrics.romanised.is_empty());
         ui.set_lyrics_synced(lyrics.is_synced());
         ui.set_lyrics_source(lyrics.source.as_str().into());
         ui.set_lyrics_current(-1);

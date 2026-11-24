@@ -10,7 +10,7 @@ use slint::{
 
 use super::{App, SPEEDS, opaque, s};
 use crate::{
-    AppWindow, Theme,
+    AppWindow, LyricsExtras, Theme,
     audio::eq,
     images, local,
     settings::{self, Accent, CROSSFADE_SECS, Look, Settings},
@@ -28,6 +28,9 @@ impl App {
         ui.set_normalise(settings.normalise.index());
         ui.set_discord(settings.discord);
         ui.set_animated_art(settings.animated_art);
+        let extras = ui.global::<LyricsExtras>();
+        extras.set_translate(settings.lyrics_translation);
+        extras.set_romanise(settings.lyrics_romanisation);
         ui.set_autoplay(settings.autoplay);
         ui.set_youtube_history(settings.youtube_history);
         ui.set_rating_buttons(settings.rating_buttons);

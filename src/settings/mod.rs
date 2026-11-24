@@ -220,6 +220,10 @@ pub struct Settings {
     /// The full player plays the song's Spotify Canvas or its album's Apple
     /// Music motion cover, where there is one.
     pub animated_art: bool,
+    /// Lyric lines show their translation beneath them, where the lyrics have one.
+    pub lyrics_translation: bool,
+    /// Likewise their romanisation.
+    pub lyrics_romanisation: bool,
     pub window: Option<WindowGeometry>,
     /// Where the mini player was last put, in physical pixels.
     pub mini_position: Option<(i32, i32)>,
@@ -319,6 +323,8 @@ impl Default for Settings {
             look: Look::Black,
             accent: Accent::Lily,
             animated_art: false,
+            lyrics_translation: false,
+            lyrics_romanisation: false,
             window: None,
             mini_position: None,
             local_folders: Vec::new(),

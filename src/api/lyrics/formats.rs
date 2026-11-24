@@ -1,6 +1,7 @@
 //! The lyrics formats other sites serve: Apple Music's TTML, LRC, and Tencent Music's KRC and QRC.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Read;
 use std::mem;
 
@@ -30,17 +31,24 @@ pub(super) fn ttml(text: &str, source: &str) -> Option<Lyrics> {
     } else {
         Vec::new()
     };
-    let words = if reader.words.iter().all(Vec::is_empty) {
-        Vec::new()
-    } else {
-        reader.words
-    };
+    let [translations, romanised] = reader.extras.map(|lines| or_empty(lines, String::is_empty));
     Some(Lyrics {
         lines: reader.lines,
         starts,
-        words,
+        words: or_empty(reader.words, Vec::is_empty),
+        translations,
+        romanised,
         source: source.to_owned(),
     })
+}
+
+/// Empty unless some line has one.
+fn or_empty<T>(lines: Vec<T>, empty: impl Fn(&T) -> bool) -> Vec<T> {
+    if lines.iter().all(empty) {
+        Vec::new()
+    } else {
+        lines
+    }
 }
 
 /// A clock value in seconds: "27.395", "1:05.20", "1:02:03.4", "12.3s" or "500ms".
@@ -68,16 +76,29 @@ struct Span {
     has_child: bool,
 }
 
+/// Indices into `Reader`'s extras.
+const TRANSLATION: usize = 0;
+const ROMANISED: usize = 1;
+
 /// TTML read in document order, as a SAX parser sees it.
 #[derive(Default)]
-struct Reader {
+struct Reader<'a> {
     lines: Vec<String>,
     starts: Vec<f64>,
     words: Vec<Vec<Word>>,
+    /// Each line's translation and romanisation.
+    extras: [Vec<String>; 2],
     timed: bool,
-    // Only <p> in <body> counts: <head> holds translations and romanisations in timed spans of their own.
+    // Only <p> in <body> is sung: <head> holds translations and romanisations, by line key.
     in_body: bool,
     in_line: bool,
+    /// The head's first translation and romanisation, by line key.
+    by_key: [HashMap<&'a str, String>; 2],
+    /// The head's translation or romanisation being read.
+    section: Option<usize>,
+    key: Option<&'a str>,
+    /// The line's own translation and romanisation spans.
+    inline: [String; 2],
     begin: Option<f64>,
     line_words: Vec<Word>,
     /// Text since the last span boundary, its whitespace collapsed.
@@ -85,9 +106,9 @@ struct Reader {
     spans: Vec<Span>,
 }
 
-impl Reader {
+impl<'a> Reader<'a> {
     /// Visits every node without recursion, so deep nesting can't exhaust the stack.
-    fn walk(&mut self, root: Node) {
+    fn walk(&mut self, root: Node<'a, '_>) {
         let mut node = root;
         loop {
             let read = self.open(node);
@@ -113,8 +134,8 @@ impl Reader {
         }
     }
 
-    /// Whether to read the node's children: a translation or romanisation span isn't sung.
-    fn open(&mut self, node: Node) -> bool {
+    /// Whether to read the node's children: a translation or romanisation isn't sung.
+    fn open(&mut self, node: Node<'a, '_>) -> bool {
         if node.is_text() {
             if self.in_line {
                 collapse(node.text().unwrap_or_default(), &mut self.pending);
@@ -123,12 +144,40 @@ impl Reader {
         }
         match node.tag_name().name() {
             "body" => self.in_body = true,
+            name @ ("translation" | "transliteration") if !self.in_body => {
+                let kind = if name == "translation" {
+                    TRANSLATION
+                } else {
+                    ROMANISED
+                };
+                // Another language's would mix with the first's.
+                if self.by_key[kind].is_empty() {
+                    self.section = Some(kind);
+                }
+            }
+            "text" if let Some(kind) = self.section => {
+                if let Some(key) = attribute(node, "for") {
+                    self.by_key[kind]
+                        .entry(key)
+                        .or_insert_with(|| text_of(node));
+                }
+                return false;
+            }
             "p" if self.in_body => {
                 self.in_line = true;
                 self.begin = time(node, "begin");
+                self.key = attribute(node, "key");
             }
             "span" if self.in_line => {
-                if matches!(attribute(node, "role"), Some("x-translation" | "x-roman")) {
+                let kind = match attribute(node, "role") {
+                    Some("x-translation") => Some(TRANSLATION),
+                    Some("x-roman") => Some(ROMANISED),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    if self.inline[kind].is_empty() {
+                        self.inline[kind] = text_of(node);
+                    }
                     return false;
                 }
                 self.flush();
@@ -148,6 +197,7 @@ impl Reader {
     fn close(&mut self, node: Node) {
         match node.tag_name().name() {
             "body" => self.in_body = false,
+            "translation" | "transliteration" => self.section = None,
             "p" if self.in_line => self.end_line(),
             "span" if self.in_line => self.end_span(),
             _ => {}
@@ -201,11 +251,23 @@ impl Reader {
             } else {
                 self.starts.last().copied().unwrap_or(0.0)
             };
+            for (kind, extras) in self.extras.iter_mut().enumerate() {
+                let mut extra = mem::take(&mut self.inline[kind]);
+                if extra.is_empty() {
+                    extra = self
+                        .key
+                        .and_then(|key| self.by_key[kind].remove(key))
+                        .unwrap_or_default();
+                }
+                // One the same as the line, as an English line's, adds nothing.
+                extras.push(if extra == text { String::new() } else { extra });
+            }
             self.lines.push(text);
             self.starts.push(start);
             self.words.push(words);
         }
         self.in_line = false;
+        self.inline = Default::default();
         self.pending.clear();
         self.spans.clear();
     }
@@ -231,6 +293,22 @@ fn collapse(text: &str, to: &mut String) {
             to.push(' ');
         }
     }
+}
+
+/// All the text within `node`, its whitespace collapsed and trimmed.
+fn text_of(node: Node) -> String {
+    let mut text = String::new();
+    for part in node.descendants().filter(Node::is_text) {
+        collapse(part.text().unwrap_or_default(), &mut text);
+    }
+    // `collapse` leaves at most one space at either end.
+    if text.ends_with(' ') {
+        text.pop();
+    }
+    if text.starts_with(' ') {
+        text.remove(0);
+    }
+    text
 }
 
 /// Prefixes differ by host (tt:, itunes:, lrc:, ttm:), so attributes are matched by local name.
@@ -490,6 +568,7 @@ fn tencent(text: &str, source: &str, words: impl Fn(&str, f64) -> Vec<Word>) -> 
         starts: Vec::with_capacity(rows.len()),
         words: Vec::with_capacity(rows.len()),
         source: source.to_owned(),
+        ..Lyrics::default()
     };
     for mut row in rows {
         for word in &mut row.words {
@@ -654,24 +733,36 @@ mod tests {
             starts: vec![1.0, 4.0],
             words,
             source: "Source: Apple Music".to_owned(),
+            ..Lyrics::default()
         };
         assert_eq!(read, expected);
         assert!(read.is_word_synced());
     }
 
     #[test]
-    fn ignores_the_heads_translations() {
-        let head = r#"<translations><translation type="replacement" xml:lang="en-US"><text for="L1"><span begin="1.000" end="2.000" xmlns="http://www.w3.org/ns/ttml">Other</span></text></translation></translations><transliterations><transliteration xml:lang="ko-Latn"><text for="L1"><span begin="1.000" end="2.000" xmlns="http://www.w3.org/ns/ttml">Roman</span> <span ttm:role="x-bg" xmlns="http://www.w3.org/ns/ttml"><span begin="2.000" end="2.500">(echo)</span></span></text></transliteration></transliterations>"#;
-        let body = r#"<p begin="1.000" end="2.000" lrc:key="L1"><span begin="1.000" end="2.000">Lorem</span></p>"#;
+    fn reads_the_heads_first_translation_and_romanisation_by_line() {
+        let head = r#"<translations><translation type="replacement" xml:lang="en-US"><text for="L1"><span begin="1.000" end="2.000" xmlns="http://www.w3.org/ns/ttml">Other</span></text><text for="L2">Same</text></translation><translation xml:lang="fr"><text for="L1">Autre</text><text for="L3">Encore</text></translation></translations><transliterations><transliteration xml:lang="ko-Latn"><text for="L1"><span begin="1.000" end="2.000" xmlns="http://www.w3.org/ns/ttml">Roman</span> <span ttm:role="x-bg" xmlns="http://www.w3.org/ns/ttml"><span begin="2.000" end="2.500">(echo)</span></span></text></transliteration></transliterations>"#;
+        let body = r#"<p begin="1.000" end="2.000" lrc:key="L1"><span begin="1.000" end="2.000">Lorem</span></p>
+<p begin="3.000" end="4.000" lrc:key="L2">Same</p>
+<p begin="5.000" end="6.000" lrc:key="L3">Ipsum</p>"#;
         let read = document(body, head, "Word").unwrap();
-        assert_eq!(read.lines, ["Lorem"]);
-        assert_eq!(read.words, [[word("Lorem", 1.0, 2.0)]]);
+        assert_eq!(read.lines, ["Lorem", "Same", "Ipsum"]);
+        assert_eq!(read.words[0], [word("Lorem", 1.0, 2.0)]);
+        assert_eq!(
+            read.translations,
+            ["Other", "", ""],
+            "the same line is left out"
+        );
+        assert_eq!(read.romanised, ["Roman (echo)", "", ""]);
+        let plain = document(body, "", "Word").unwrap();
+        assert!(plain.translations.is_empty() && plain.romanised.is_empty());
     }
 
     #[test]
-    fn keeps_background_vocals_inline_and_skips_translated_spans() {
+    fn keeps_background_vocals_inline_and_takes_translated_spans_aside() {
         let body = r#"<p begin="1.000" end="2.500"><span begin="1.000" end="1.500">Lorem</span> <span ttm:role="x-bg"><span begin="1.400" end="2.000">(Ip-</span><span begin="2.000" end="2.500">sum)</span></span><span ttm:role="x-translation" xml:lang="fr"><span begin="1.000" end="2.000">Autre</span></span><span ttm:role="x-roman">Roma</span></p>"#;
-        let read = document(body, "", "Word").unwrap();
+        let head = r#"<translations><translation xml:lang="fr"><text for="L1">Tête</text></translation></translations>"#;
+        let read = document(&body.replace("<p ", r#"<p lrc:key="L1" "#), head, "Word").unwrap();
         assert_eq!(read.lines, ["Lorem (Ip-sum)"]);
         assert_eq!(
             read.words,
@@ -681,6 +772,12 @@ mod tests {
                 word("sum)", 2.0, 2.5)
             ]]
         );
+        assert_eq!(
+            read.translations,
+            ["Autre"],
+            "the line's own over the head's"
+        );
+        assert_eq!(read.romanised, ["Roma"]);
     }
 
     #[test]
@@ -850,6 +947,7 @@ mod tests {
                 vec![word("晴", 12.0, 12.5), word("天", 12.5, 13.0)],
             ],
             source: "S".to_owned(),
+            ..Lyrics::default()
         }
     }
 

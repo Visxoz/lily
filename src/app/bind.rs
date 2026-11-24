@@ -4,7 +4,7 @@ use slint::ComponentHandle;
 
 use super::{App, updates::up_to_date_status};
 use crate::{
-    Api as ApiGlobal, AppWindow,
+    Api as ApiGlobal, AppWindow, LyricsExtras,
     api::{Rating, Route},
     audio::eq,
     settings::{Accent, Look, Quality},
@@ -233,6 +233,11 @@ impl App {
             .update_settings(|s| s.youtube_history = value));
         on!(on_set_rating_buttons, |app, value| app
             .update_settings(|s| s.rating_buttons = value));
+        let extras = ui.global::<LyricsExtras>();
+        on!(extras.on_set_translate, |app, on| app
+            .update_settings(|s| s.lyrics_translation = on));
+        on!(extras.on_set_romanise, |app, on| app
+            .update_settings(|s| s.lyrics_romanisation = on));
         on!(on_set_speed, |app, index| app.set_speed(index as usize));
         on!(on_set_close_to_tray, |app, value| app
             .set_close_to_tray(value));

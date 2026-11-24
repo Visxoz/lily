@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { LyricLine, Lyrics } from "../panel/lyrics.slint";
+import { LyricLine, Lyrics, LyricsToggles } from "../panel/lyrics.slint";
 import { Art } from "../widgets/art.slint";
 import { LyricsPlaceholder } from "../widgets/skeleton.slint";
 
@@ -116,16 +116,19 @@ export component FullPlayer inherits Rectangle {
                 line-size: 34px;
             }
             // Lines much wider than this are hard to follow.
-            if !root.lyrics-loading: Lyrics {
+            if !root.lyrics-loading: VerticalLayout {
                 x: (parent.width - self.width) / 2;
                 width: min(parent.width, 800px);
-                line-size: 34px;
-                rest-opacity: root.moving ? 0.65 : 0.5;
-                lines: root.lyrics;
-                synced: root.lyrics-synced;
-                current: root.lyrics-current;
-                source: root.lyrics-source;
-                line-clicked(i) => { root.lyric-clicked(i); }
+                LyricsToggles { }
+                Lyrics {
+                    line-size: 34px;
+                    rest-opacity: root.moving ? 0.65 : 0.5;
+                    lines: root.lyrics;
+                    synced: root.lyrics-synced;
+                    current: root.lyrics-current;
+                    source: root.lyrics-source;
+                    line-clicked(i) => { root.lyric-clicked(i); }
+                }
             }
         }
     }

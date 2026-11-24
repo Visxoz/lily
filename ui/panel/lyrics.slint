@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { Api } from "../types.slint";
+import { Pill } from "../widgets/buttons.slint";
 
 /// A word or syllable as sung, its text keeping any space after it.
 export struct LyricWord {
@@ -12,6 +13,46 @@ export struct LyricWord {
 export struct LyricLine {
     text: string,
     words: [LyricWord],
+    translation: string,
+    romanised: string,
+}
+
+/// Whether the lyrics shown have translations and romanisations, and which
+/// the user shows beneath each line.
+export global LyricsExtras {
+    in property <bool> has-translation;
+    in property <bool> has-romanisation;
+    in property <bool> translate;
+    in property <bool> romanise;
+    callback set-translate(on: bool);
+    callback set-romanise(on: bool);
+}
+
+/// Above the lyrics rather than in them, so they don't scroll away.
+export component LyricsToggles inherits HorizontalLayout {
+    if LyricsExtras.has-translation || LyricsExtras.has-romanisation: HorizontalLayout {
+        padding-left: 24px;
+        padding-top: 12px;
+        alignment: start;
+        spacing: 6px;
+        if LyricsExtras.has-romanisation: Pill {
+            label: "Romanisation";
+            active: LyricsExtras.romanise;
+            clicked => { LyricsExtras.set-romanise(!LyricsExtras.romanise); }
+        }
+        if LyricsExtras.has-translation: Pill {
+            label: "Translation";
+            active: LyricsExtras.translate;
+            clicked => { LyricsExtras.set-translate(!LyricsExtras.translate); }
+        }
+    }
+}
+
+component Extra inherits Text {
+    wrap: word-wrap;
+    font-weight: 600;
+    color: Theme.text-secondary;
+    animate opacity { duration: Theme.normal; }
 }
 
 /// The song's time for the line sung word by word: `at` seconds when set,
@@ -104,6 +145,18 @@ export component Lyrics inherits Flickable {
         root.content-y = root.centred();
     }
 
+    /// Keeps the current line centred as rows change height, as the extras
+    /// shown or hidden do; a glide is aimed at its new place instead.
+    function follow(y: length, height: length) {
+        if root.gliding {
+            root.line-y = y;
+            root.line-height = height;
+            root.glide-to = root.centred();
+        } else {
+            root.centre-on(y, height);
+        }
+    }
+
     // A line made current as the rows are created sees only the rows before
     // it, so it is centred again once the column has its full height.
     changed content-height => {
@@ -155,13 +208,13 @@ export component Lyrics inherits Flickable {
                 }
             }
             changed y => {
-                if self.is-current && !root.gliding {
-                    root.centre-on(self.y, self.height);
+                if self.is-current {
+                    root.follow(self.y, self.height);
                 }
             }
             changed height => {
-                if self.is-current && !root.gliding {
-                    root.centre-on(self.y, self.height);
+                if self.is-current {
+                    root.follow(self.y, self.height);
                 }
             }
 
@@ -192,6 +245,16 @@ export component Lyrics inherits Flickable {
                             : self.sung >= 1 ? Theme.text
                             : @linear-gradient(90deg, Theme.text 0%, Theme.text self.sung * 100%, self.dim self.sung * 100%, self.dim 100%);
                     }
+                }
+                if LyricsExtras.romanise && line.romanised != "": Extra {
+                    text: line.romanised;
+                    font-size: root.line-size * 0.7;
+                    opacity: alpha;
+                }
+                if LyricsExtras.translate && line.translation != "": Extra {
+                    text: line.translation;
+                    font-size: root.line-size * 0.7;
+                    opacity: alpha;
                 }
             }
         }

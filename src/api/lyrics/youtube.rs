@@ -90,8 +90,8 @@ fn parse(json: &str) -> Option<Lyrics> {
             .map(|line| line.lyric_line)
             .collect(),
         starts: starts.unwrap_or_default(),
-        words: Vec::new(),
         source: data.source_message,
+        ..Lyrics::default()
     })
 }
 
