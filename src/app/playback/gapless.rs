@@ -129,7 +129,7 @@ impl App {
         self.present(&track, 0.0);
         self.record_play();
         self.show_stream(&stream);
-        self.state.borrow_mut().playback.playing = Some((id, stream, resolved_at));
+        (self.state.borrow_mut().playback).set_playing(id, stream, resolved_at);
         self.ui().set_np_loading(false);
         self.update_media_state();
         self.extend_with_radio_if_ending();

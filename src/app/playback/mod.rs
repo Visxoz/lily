@@ -109,7 +109,7 @@ impl App {
         let start_at = self.resume_position();
         self.player
             .load(self.stream_spec(id, stream.clone(), start_at));
-        self.state.borrow_mut().playback.playing = Some((id.to_owned(), stream, resolved_at));
+        (self.state.borrow_mut().playback).set_playing(id.to_owned(), stream, resolved_at);
     }
 
     /// Opens the song again where it stopped, a few times while the

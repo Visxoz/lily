@@ -78,6 +78,20 @@ impl Playback {
         self.forget_queued();
     }
 
+    /// Makes `id` the playing stream, keeping the one it replaces as
+    /// prefetched, so Previous plays it without asking YouTube again.
+    pub(super) fn set_playing(&mut self, id: String, stream: ResolvedStream, at: Instant) {
+        if let Some((old, mut old_stream, old_at)) = self.playing.replace((id, stream, at))
+            && self.playing.as_ref().is_some_and(|(id, ..)| *id != old)
+            // Its URL may have been refused past the first megabyte.
+            && !old_stream.client.is_some_and(crate::streams::is_cut_off)
+        {
+            // Its first bytes stay only with the newest prefetch.
+            old_stream.head = Default::default();
+            self.prefetched.insert(old, (old_stream, old_at));
+        }
+    }
+
     pub(super) fn has_prefetched(&self, id: &str) -> bool {
         self.prefetched
             .get(id)
@@ -216,5 +230,17 @@ mod tests {
             Some(("a".into(), 42.0)),
             "b never sounded, so has no place to carry on from"
         );
+    }
+
+    #[test]
+    fn the_song_moved_on_from_stays_for_previous() {
+        let mut playback = Playback::default();
+        let stream = ResolvedStream::default();
+        playback.set_playing("a".into(), stream.clone(), Instant::now());
+        playback.set_playing("a".into(), stream.clone(), Instant::now());
+        assert!(!playback.has_prefetched("a"), "a replay sets none aside");
+        playback.set_playing("b".into(), stream, Instant::now());
+        assert!(playback.has_prefetched("a"));
+        assert!(!playback.has_prefetched("b"));
     }
 }

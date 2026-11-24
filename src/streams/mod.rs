@@ -84,6 +84,14 @@ pub fn cut_off(client: &str) {
     }
 }
 
+pub fn is_cut_off(client: &str) -> bool {
+    let cut = CUT_OFF.lock().unwrap();
+    CLIENTS
+        .iter()
+        .position(|c| c.name == client)
+        .is_some_and(|i| cut.contains(&i))
+}
+
 /// Moves client `i` to the back of `cut`, returning whether it is new there.
 fn mark(cut: &mut Vec<usize>, i: usize) -> bool {
     let new = !cut.contains(&i);
