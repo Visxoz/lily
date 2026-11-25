@@ -219,12 +219,23 @@ impl Api {
         if !is_video_id(&track.id) {
             return Ok(None);
         }
-        lyrics::find(track, self.youtube_lyrics(&track.id)).await
+        let details = async { self.q().music_details(&track.id).await.map_err(err) };
+        // Only other sites, never asked for a music video, need the length.
+        if track.duration.is_some() || track.video {
+            let own = async { self.youtube_lyrics(details.await?.lyrics_id).await };
+            return lyrics::find(track, own).await;
+        }
+        // Home's rows have none, so it's read from YouTube's details first.
+        let details = details.await?;
+        let track = Track {
+            duration: details.track.duration,
+            ..track.clone()
+        };
+        lyrics::find(&track, self.youtube_lyrics(details.lyrics_id)).await
     }
 
-    async fn youtube_lyrics(&self, video_id: &str) -> Result<Option<Lyrics>> {
-        let details = self.q().music_details(video_id).await.map_err(err)?;
-        let Some(lyrics_id) = details.lyrics_id else {
+    async fn youtube_lyrics(&self, lyrics_id: Option<String>) -> Result<Option<Lyrics>> {
+        let Some(lyrics_id) = lyrics_id else {
             return Ok(None);
         };
         match lyrics::timed(&lyrics_id).await {
