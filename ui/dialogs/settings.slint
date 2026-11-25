@@ -120,6 +120,56 @@ component AddressField inherits Rectangle {
     }
 }
 
+/// Section titles over a hairline, the open one underlined, as on iOS.
+component SectionTabs inherits Rectangle {
+    in property <[string]> labels;
+    in property <int> current;
+    callback picked(index: int);
+    height: 44px;
+    accessible-role: tab-list;
+
+    Rectangle {
+        y: parent.height - self.height;
+        height: 1px;
+        background: Theme.divider;
+    }
+
+    HorizontalLayout {
+        alignment: space-between;
+        spacing: 12px;
+        for label[i] in root.labels: TouchArea {
+            property <bool> active: root.current == i;
+            width: title.preferred-width;
+            mouse-cursor: pointer;
+            accessible-role: tab;
+            accessible-label: label;
+            accessible-item-index: i;
+            accessible-item-selectable: true;
+            accessible-item-selected: self.active;
+            accessible-action-default => { root.picked(i); }
+            clicked => { root.picked(i); }
+            // Same weight either way, so the tabs never shift.
+            title := Text {
+                text: label;
+                font-size: 13px;
+                font-weight: 600;
+                accessible-role: none;
+                color: parent.active || parent.has-hover ? Theme.text : Theme.text-secondary;
+                animate color { duration: Theme.fast; }
+            }
+
+            // A colour fade, as `opacity` would add an item per tab.
+            Rectangle {
+                y: parent.height - self.height;
+                height: 3px;
+                border-radius: self.height / 2;
+                background: Theme.accent.with-alpha(parent.active ? 1 : 0);
+                animate background { duration: Theme.fast; }
+            }
+        }
+    }
+}
+
 /// One tab's rows, all tabs the same height so the dialog keeps its size
 /// when switching between them.
 component Tab inherits VerticalLayout {
@@ -218,11 +268,10 @@ export component SettingsDialog inherits Dialog {
     }
 
     title: "Settings";
-    // Wide enough for the six tabs on one line.
     dialog-width: 580px;
     open: root.settings-open;
     close => { root.settings-open = false; }
-    PillGroup {
+    SectionTabs {
         labels: ["Playback", "Sound", "Library", "Appearance", "Account", "About"];
         current: root.tab;
         picked(i) => { root.tab = i; }
