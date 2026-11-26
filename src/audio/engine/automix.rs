@@ -55,8 +55,9 @@ const MIN_BPM: f64 = 70.0;
 const MAX_BPM: f64 = 180.0;
 const LIKELY_BPM: f64 = 120.0;
 /// How regular the onsets must be to count as a beat: their correlation
-/// one beat apart, from 0 for noise to 1 for a metronome.
-const MIN_PULSE: f64 = 0.3;
+/// one beat apart, from 0 for noise to 1 for a metronome. The grid's own
+/// checks reject what passes wrongly, so this only spares them noise.
+const MIN_PULSE: f64 = 0.25;
 /// How far onsets are spread either side, in hops, for finding the tempo, so
 /// hits whose attack is drawn out or played a little off still line up.
 const SPREAD_HOPS: usize = 4;
@@ -78,6 +79,12 @@ const MIN_CLARITY: f64 = 5.5;
 /// How much of the onset the stretches keeping to the grid must carry, of
 /// all those carrying onset.
 const KEPT_SHARE: f64 = 2.0 / 3.0;
+/// How much of the beats' onset both thirds between them must carry for the
+/// grid to be a beat and a half; a swung beat fills only one.
+const THIRDS: f64 = 0.2;
+/// How much of the beats' onset, and of their bass, the off-beats may carry
+/// before the grid may be two beats.
+const HALF: f64 = 0.8;
 /// The fewest beats that must sound for a grid to count.
 const MIN_BEATS: usize = 6;
 /// The furthest the two tracks' beats may drift apart over a blend, in beats.
@@ -126,6 +133,9 @@ const SKEW: f32 = 0.6;
 const SUNG_SLACK_SECS: f64 = 1.5;
 /// Where the bass splits from the rest, in Hz.
 const BASS_HZ: f32 = 160.0;
+/// The low-pass whose remainder is the highs, snares and hats, in Hz; gentle,
+/// as a steep split found fewer beats and more wrong ones.
+const HIGH_HZ: f32 = 2_000.0;
 /// The bass trade's length with no beat to time it, in seconds.
 const TRADE_SECS: f64 = 0.5;
 /// How long before the trade the outgoing's cut starts, so it has settled.
@@ -135,8 +145,8 @@ const FLOOR: f32 = 1e-10;
 /// Filter memory below this is flushed, as denormal floats are slow.
 const DENORMAL: f32 = 1e-20;
 
-/// Two cascaded one-pole low-passes: the bass's loudness, for kicks, and an
-/// echo's damping.
+/// Two cascaded one-pole low-passes: the bass's loudness, for kicks, what the
+/// highs are split from, and an echo's damping.
 #[derive(Clone, Copy)]
 struct Lows {
     coeff: f32,
@@ -255,38 +265,42 @@ pub(super) struct Analysis {
 pub(super) fn analyse(samples: &[f32], rate: u32, channels: usize) -> Analysis {
     let hop = (rate / HOPS_PER_SEC).max(1) as usize;
     let hops = samples.len() / (hop * channels);
-    let mut lows = Lows::new(BASS_HZ, rate);
+    let (mut lows, mut under_highs) = (Lows::new(BASS_HZ, rate), Lows::new(HIGH_HZ, rate));
     // Running sums of each hop's energy, in f64 so a quiet stretch after a
     // loud one keeps its precision; a stretch's mean is then two lookups.
-    let (mut all, mut low) = (vec![0.0f64], vec![0.0f64]);
-    all.reserve_exact(hops);
-    low.reserve_exact(hops);
+    let (mut all, mut low, mut high) = (vec![0.0f64], vec![0.0f64], vec![0.0f64]);
+    for sums in [&mut all, &mut low, &mut high] {
+        sums.reserve_exact(hops);
+    }
     let per_channel = 1.0 / channels as f32;
     for block in samples.chunks_exact(hop * channels) {
-        let (mut a, mut l) = (0.0, 0.0);
+        let (mut a, mut l, mut h) = (0.0, 0.0, 0.0);
         for frame in block.chunks_exact(channels) {
             let x = frame.iter().sum::<f32>() * per_channel;
-            let lo = lows.run(x);
+            let (lo, hi) = (lows.run(x), x - under_highs.run(x));
             a += x * x;
             l += lo * lo;
+            h += hi * hi;
         }
-        all.push(all[all.len() - 1] + f64::from(a / hop as f32));
-        low.push(low[low.len() - 1] + f64::from(l / hop as f32));
+        for (sums, e) in [(&mut all, a), (&mut low, l), (&mut high, h)] {
+            sums.push(sums[sums.len() - 1] + f64::from(e / hop as f32));
+        }
     }
-    // The bass's rises for kicks, the whole's for the rest, taken where they
-    // step up, as a capped rise stays flat while its hit is recent. The
-    // bass's uncapped, which an accent shows in, mark the downbeats.
-    let (all_recent, low_recent) = (recent(&all), recent(&low));
+    // The bass's rises for kicks, the highs' for snares and hats, the
+    // whole's for the rest, taken where they step up, as a capped rise stays
+    // flat while its hit is recent. The bass's uncapped, which an accent
+    // shows in, mark the downbeats.
+    let (all_recent, low_recent, high_recent) = (recent(&all), recent(&low), recent(&high));
     let mut last = 0.0;
     let (mut onsets, mut hits) = (Vec::with_capacity(hops), Vec::with_capacity(hops));
     for i in 0..hops {
         let (bass, hit) = rise(&low_recent, i);
-        let r = rise(&all_recent, i).0 + bass;
+        let r = rise(&all_recent, i).0 + bass + rise(&high_recent, i).0;
         onsets.push((r - last).max(0.0));
         hits.push(hit);
         last = r;
     }
-    let beats = beats(&onsets, f64::from(rate) / hop as f64).map(|b| Beats {
+    let beats = beats(&onsets, &hits, f64::from(rate) / hop as f64).map(|b| Beats {
         period: b.period * hop as f64,
         first: b.first * hop as f64,
         downbeat: downbeat(&hits, b).map(|d| d * hop as f64),
@@ -355,13 +369,8 @@ fn rise(recent: &[f64], i: usize) -> (f32, f32) {
 /// The first downbeat of `beats`, in hops: of the bar's four beats, the one
 /// whose bass `hits` are clearly the strongest, taking bars as of four.
 fn downbeat(hits: &[f32], beats: Beats) -> Option<f64> {
-    let weights: [f64; 4] = std::array::from_fn(|p| {
-        let anchor = beats.first + p as f64 * beats.period;
-        centres(hits, (4.0 * beats.period, anchor))
-            .iter()
-            .map(|t| t.mass)
-            .sum()
-    });
+    let bar = (4.0 * beats.period, beats.first);
+    let weights: [f64; 4] = std::array::from_fn(|p| near(hits, bar, p as f64 / 4.0));
     let mut sorted = weights;
     sorted.sort_by(|a, b| b.total_cmp(a));
     let p = weights.iter().position(|&w| w == sorted[0])?;
@@ -379,10 +388,10 @@ fn smooth(sums: &[f64]) -> Vec<f32> {
         .collect()
 }
 
-/// The beat in `onsets`, in hops: the likeliest tempo's lag, the comb grid
-/// near it gathering the most onset, then fitted through its beats' onsets.
-/// None unless the pulse is regular and the stretches keep to the grid.
-fn beats(onsets: &[f32], hops_per_sec: f64) -> Option<Beats> {
+/// The beat in `onsets`, in hops: the comb grid near the likeliest lag, fitted
+/// through its onsets, and narrowed should it hold one and a half beats or two.
+/// None unless the pulse is regular and the stretches keep to it.
+fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<Beats> {
     let n = onsets.len();
     let min_lag = (60.0 * hops_per_sec / MAX_BPM).floor() as usize;
     let max_lag = (60.0 * hops_per_sec / MIN_BPM).ceil() as usize;
@@ -415,21 +424,67 @@ fn beats(onsets: &[f32], hops_per_sec: f64) -> Option<Beats> {
     if pulse < MIN_PULSE {
         return None;
     }
+    let mut beat = grid(onsets, &blurred, lag as f64)?;
+    // A grid whose beats each third of the way to the next carry onset too is
+    // a beat and a half, as a 3-3-2 rhythm makes it, or a beat under triplets.
+    // The beat within is taken only should it find more bass a beat, which
+    // under triplets it can't, as it holds only every other beat.
+    if near(onsets, beat, 1.0 / 3.0).min(near(onsets, beat, 2.0 / 3.0))
+        >= THIRDS * near(onsets, beat, 0.0)
+    {
+        let fine = finer(onsets, &blurred, beat.0 * 2.0 / 3.0, min_lag)?;
+        let per_beat = |g: (f64, f64)| near(hits, g, 0.0) * g.0;
+        if per_beat(fine) <= per_beat(beat) {
+            return None;
+        }
+        beat = fine;
+    }
+    // One whose off-beats carry nearly as much, the bass's too, is two beats, its
+    // phase a toss-up, and taken at the beat within or left.
+    if near(onsets, beat, 0.5) >= HALF * near(onsets, beat, 0.0)
+        && near(hits, beat, 0.5) >= HALF * near(hits, beat, 0.0)
+    {
+        beat = finer(onsets, &blurred, beat.0 / 2.0, min_lag)?;
+    }
+    steady(onsets, beat, hops_per_sec)
+}
+
+/// The grid near `lag`, should it be no shorter than `min_lag`.
+fn finer(onsets: &[f32], blurred: &[f32], lag: f64, min_lag: usize) -> Option<(f64, f64)> {
+    (lag >= min_lag as f64).then(|| grid(onsets, blurred, lag))?
+}
+
+/// The onset of `of` near the beats of `grid`, moved on by `shift` beats.
+fn near(of: &[f32], (period, anchor): (f64, f64), shift: f64) -> f64 {
+    centres(of, (period, anchor + shift * period))
+        .iter()
+        .map(|t| t.mass)
+        .sum()
+}
+
+/// The grid `(period, anchor)` near `lag` gathering the most of `blurred`,
+/// fitted through `onsets`.
+fn grid(onsets: &[f32], blurred: &[f32], lag: f64) -> Option<(f64, f64)> {
     // A whole-hop lag drifts off the beat over the window, so the period is
     // sought to a fiftieth of a hop. Anchored mid-window, the best anchor
     // barely moves with the period, so it is sought only near the lag's.
-    let (mid, half) = ((n / 2) as i32, lag as i32 / 2);
-    let (_, rough) = best(&blurred, [lag as f64], mid - half..=mid + half)?;
-    let periods =
-        (-50 * SEARCH_HOPS..=50 * SEARCH_HOPS).map(|step| lag as f64 + f64::from(step) / 50.0);
+    let (mid, half) = ((onsets.len() / 2) as i32, lag as i32 / 2);
+    let (_, rough) = best(blurred, [lag], mid - half..=mid + half)?;
+    let periods = (-50 * SEARCH_HOPS..=50 * SEARCH_HOPS).map(|step| lag + f64::from(step) / 50.0);
     let anchors = rough - ANCHOR_HOPS..=rough + ANCHOR_HOPS;
-    let (period, anchor) = best(&blurred, periods, anchors)?;
+    let (period, anchor) = best(blurred, periods, anchors)?;
     // The blur that lets the comb find the beat also flattens it over small
     // errors, so the grid is refitted through each beat's own onsets.
     let mut grid = (period, f64::from(anchor));
     for _ in 0..2 {
         grid = fit(&centres(onsets, grid))?;
     }
+    Some(grid)
+}
+
+/// `grid` as beats, should enough of them sound and the stretches keep to it.
+fn steady(onsets: &[f32], grid: (f64, f64), hops_per_sec: f64) -> Option<Beats> {
+    let n = onsets.len();
     let (period, anchor) = grid;
     // A few hits alone space out a tempo of their own.
     let teeth = centres(onsets, grid);
@@ -437,41 +492,39 @@ fn beats(onsets: &[f32], hops_per_sec: f64) -> Option<Beats> {
     if teeth.iter().filter(|t| t.mass >= typical / 2.0).count() < MIN_BEATS {
         return None;
     }
-    // A period a little off, or a tempo that wanders, fits the whole window
-    // but leaves some stretch off the grid. A stretch with little onset is
-    // skipped; one on the off-beats, as in a breakdown, passes while such
-    // stretches carry at most `1 - KEPT_SHARE` of the onset.
+    // A period a little off, or a wandering tempo, leaves some stretch off the
+    // grid. A stretch on the off-beats, as in a breakdown, passes only between
+    // stretches on the beat, as at either end the beat may have moved.
     let off_beats = centres(onsets, (period, anchor + period / 2.0));
     let stretches = ((n as f64 / (STRETCH_SECS * hops_per_sec)).round() as usize).max(1);
     let share = onsets.iter().map(|&o| f64::from(o)).sum::<f64>() / (2 * stretches) as f64;
-    let (mut kept, mut lost) = (0.0, 0.0);
+    let (mut kept, mut lost, mut ends_off) = (0.0, 0.0, false);
     for i in 0..stretches {
         let hops = i * n / stretches..(i + 1) * n / stretches;
         let mass: f64 = onsets[hops.clone()].iter().map(|&o| f64::from(o)).sum();
         let keeps = |teeth: &[Tooth], anchor: f64| {
-            let (near, off) = teeth
+            let (on, off) = teeth
                 .iter()
                 .filter(|t| hops.contains(&(t.at as usize)))
-                .fold((0.0, 0.0), |(near, off), t| {
-                    (
-                        near + t.mass,
-                        off + t.mass * (t.at - (anchor + t.k * period)),
-                    )
+                .fold((0.0, 0.0), |(on, off), t| {
+                    (on + t.mass, off + t.mass * (t.at - (anchor + t.k * period)))
                 });
-            near / mass * period / (2.0 * CENTRE_HOPS + 1.0) >= MIN_CLARITY
-                && (off / near).abs() <= STEADY_HOPS
+            on / mass * period / (2.0 * CENTRE_HOPS + 1.0) >= MIN_CLARITY
+                && (off / on).abs() <= STEADY_HOPS
         };
         if mass < share {
             continue;
         } else if keeps(&teeth, anchor) {
             kept += mass;
-        } else if keeps(&off_beats, anchor + period / 2.0) {
+            ends_off = false;
+        } else if kept > 0.0 && keeps(&off_beats, anchor + period / 2.0) {
             lost += mass;
+            ends_off = true;
         } else {
             return None;
         }
     }
-    (kept >= KEPT_SHARE * (kept + lost)).then_some(Beats {
+    (!ends_off && kept >= KEPT_SHARE * (kept + lost)).then_some(Beats {
         period,
         first: anchor.rem_euclid(period),
         downbeat: None,
@@ -1177,11 +1230,41 @@ impl Echo {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::audio::engine::varispeed;
+    use std::path::PathBuf;
 
     const RATE: u32 = 48_000;
+
+    /// The audio files in `LILY_MIX_DIR`, else the app's downloads, sorted.
+    pub(in crate::audio::engine) fn mix_files() -> Vec<PathBuf> {
+        let dir = std::env::var_os("LILY_MIX_DIR").map_or_else(
+            || crate::settings::data_dir().join("downloads"),
+            PathBuf::from,
+        );
+        let audio = ["webm", "m4a", "mp4", "opus", "ogg", "mp3", "flac", "wav"];
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| Some(e.ok()?.path()))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| audio.iter().any(|a| e.eq_ignore_ascii_case(a)))
+            })
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no audio in {}", dir.display());
+        files
+    }
+
+    /// White noise in -0.5..0.5, the same from each `seed`.
+    fn white(seed: u32) -> impl FnMut() -> f32 {
+        let mut seed = seed;
+        move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+        }
+    }
 
     /// Stereo clicks at `bpm` from `offset` seconds, for `secs`.
     fn clicks(bpm: f64, offset: f64, secs: f64) -> Vec<f32> {
@@ -1209,12 +1292,8 @@ mod tests {
 
     /// Steady stereo noise at `gain(t)`, `t` in seconds.
     fn noise(secs: f64, gain: impl Fn(f64) -> f32) -> Vec<f32> {
-        let mut seed = 1u32;
-        stereo(secs, |frame| {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            let x = (seed >> 8) as f32 / (1 << 24) as f32 - 0.5;
-            x * gain(frame as f64 / f64::from(RATE))
-        })
+        let mut x = white(1);
+        stereo(secs, |frame| x() * gain(frame as f64 / f64::from(RATE)))
     }
 
     /// `samples` scaled by `gain(t)`, `t` in seconds.
@@ -1527,6 +1606,128 @@ mod tests {
             off_grid(secs(beats.first), 0.13, 60.0 / 124.0) < 0.012,
             "{beats:?}"
         );
+    }
+
+    /// Hats or snares: noise bursts fading over 30 ms, `per_beat` to a beat at
+    /// `bpm` from 0.13 s, the `k`th at `gain(k)`.
+    fn taps(bpm: f64, per_beat: f64, secs: f64, gain: impl Fn(usize) -> f32) -> Vec<f32> {
+        let step = 60.0 / bpm / per_beat;
+        let mut x = white(7);
+        stereo(secs, |frame| {
+            let x = x();
+            let t = frame as f64 / f64::from(RATE) - 0.13;
+            if t < 0.0 {
+                return 0.0;
+            }
+            gain((t / step) as usize) * (-(t.rem_euclid(step) as f32) / 0.03).exp() * x
+        })
+    }
+
+    /// Whether `beats` holds `bpm`, folded by octaves, with a beat on one
+    /// from 0.13 s.
+    fn on_the_beat(beats: Option<Beats>, bpm: f64) -> bool {
+        beats.is_some_and(|b| {
+            (fold(tempo(b), bpm) - bpm).abs() / bpm < 0.003
+                && off_grid(secs(b.first), 0.13, 60.0 / bpm) < 0.012
+        })
+    }
+
+    #[test]
+    fn hears_snares_over_a_loud_bass() {
+        // No kick, a loud bass, snares on two and four and faint hats on the
+        // eighths; only the highs show the snares.
+        let samples = mixed(&[
+            saw(41.2, 20.0, 0.5),
+            taps(150.0, 2.0, 20.0, |k| {
+                if k % 8 == 2 || k % 8 == 6 { 0.6 } else { 0.15 }
+            }),
+        ]);
+        let beats = analysed(&samples).beats;
+        assert!(on_the_beat(beats, 150.0), "{beats:?}");
+    }
+
+    #[test]
+    fn finds_the_beat_under_a_three_three_two_rhythm() {
+        // Kicks on eighths 0, 3 and 6 of each bar repeat a beat and a half
+        // apart more than a beat, with faint hats on every beat.
+        let samples = mixed(&[
+            kicks(330.0, 20.0, |k| {
+                if matches!(k % 8, 0 | 3 | 6) { 0.6 } else { 0.0 }
+            }),
+            taps(165.0, 1.0, 20.0, |_| 0.05),
+            noise(20.0, |_| 0.02),
+        ]);
+        let beats = analysed(&samples).beats;
+        assert!(on_the_beat(beats, 165.0), "{beats:?}");
+    }
+
+    #[test]
+    fn hears_a_swung_beat() {
+        // Kicks on the beat, hats on it and two thirds of the way to the next.
+        let samples = mixed(&[
+            kicks(100.0, 20.0, |_| 0.6),
+            taps(100.0, 3.0, 20.0, |k| if k % 3 == 1 { 0.0 } else { 0.2 }),
+        ]);
+        let beats = analysed(&samples).beats;
+        assert!(on_the_beat(beats, 100.0), "{beats:?}");
+    }
+
+    #[test]
+    fn never_takes_two_thirds_of_a_beat_under_triplet_hats() {
+        // Kicks on one and three, snares on two and four, hats on every third,
+        // as a beat and a half's grid has them too.
+        for bpm in [100.0, 110.0, 120.0] {
+            let samples = mixed(&[
+                kicks(bpm, 20.0, |k| if k % 2 == 0 { 0.6 } else { 0.0 }),
+                taps(bpm, 1.0, 20.0, |k| if k % 2 == 1 { 0.4 } else { 0.0 }),
+                taps(bpm, 3.0, 20.0, |_| 0.3),
+            ]);
+            let beats = analysed(&samples).beats;
+            assert!(
+                beats.is_none() || on_the_beat(beats, bpm),
+                "{bpm}: {beats:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hears_a_house_beat_under_loud_open_hats() {
+        // Kicks on the beat, out for 4 s, and open hats off it, carrying
+        // nearly as much onset, but none of the bass.
+        for bpm in [120.0, 124.0, 128.0] {
+            let kick = kicks(bpm, 20.0, |_| 0.6);
+            let samples = mixed(&[
+                gated(&kick, 0.0..8.0),
+                gated(&kick, 12.0..20.0),
+                taps(bpm, 2.0, 20.0, |k| if k % 2 == 1 { 0.3 } else { 0.0 }),
+            ]);
+            let beats = analysed(&samples).beats;
+            assert!(on_the_beat(beats, bpm), "{bpm}: {beats:?}");
+        }
+    }
+
+    #[test]
+    fn leaves_a_beat_whose_off_beats_match_it() {
+        // Either could be the beat.
+        let beats = analysed(&clicks(220.0, 0.13, 20.0)).beats;
+        assert!(beats.is_none(), "{beats:?}");
+    }
+
+    #[test]
+    fn leaves_a_beat_that_moves_at_an_end() {
+        // Onto the off-beats for the last 4 s, as where one track is cut into
+        // another; in the middle, it is a breakdown.
+        let on = clicks(124.0, 0.13, 20.0);
+        let off = clicks(124.0, 0.13 + 30.0 / 124.0, 20.0);
+        for (start, end) in [(0.0, 4.0), (16.0, 20.0)] {
+            let samples = mixed(&[
+                gated(&on, 0.0..start),
+                gated(&off, start..end),
+                gated(&on, end..20.0),
+            ]);
+            let beats = analysed(&samples).beats;
+            assert!(beats.is_none(), "{start} s: {beats:?}");
+        }
     }
 
     #[test]
@@ -1948,5 +2149,94 @@ mod tests {
             .iter()
             .fold(0f32, |m, s| m.max(s.abs()));
         assert!(end < 0.01, "rung out to {end}");
+    }
+
+    /// Finds the beat in every intro-long and tail-long window, overlapping by
+    /// half, of each audio file in `LILY_MIX_DIR`, else the app's downloads,
+    /// and says how many windows have one, how many of those stray from the
+    /// song's commonest tempo (folded by octaves), how many neighbours'
+    /// beats miss each other's by over 15 ms, and how long each took.
+    #[test]
+    #[ignore = "analyses real tracks"]
+    fn finds_beats_in_real_tracks() {
+        use crate::audio::{
+            decode::{Decoded, Decoder},
+            source::Download,
+        };
+        for path in mix_files() {
+            let Ok(mut decoder) = Decoder::open(Download::open(path.clone()).reader(), "") else {
+                continue;
+            };
+            let mut samples = Vec::new();
+            while let Ok(Decoded::Samples) = decoder.decode_next(&mut samples) {}
+            let (rate, channels) = (f64::from(decoder.rate), decoder.channels);
+            println!("{}", path.display());
+            for secs in [INTRO_SECS, TAIL_SECS] {
+                let len = (secs * rate) as usize * channels;
+                let half = len / 2 / channels;
+                let started = std::time::Instant::now();
+                let found: Vec<Option<Beats>> = (0..)
+                    .map(|i| i * half * channels)
+                    .take_while(|&at| at + len <= samples.len())
+                    .map(|at| analyse(&samples[at..at + len], decoder.rate, channels).beats)
+                    .collect();
+                if found.is_empty() {
+                    continue;
+                }
+                let took = started.elapsed() / found.len() as u32;
+                let bpm = |b: &Beats| 60.0 * rate / b.period;
+                let heard: Vec<f64> = found.iter().flatten().map(bpm).collect();
+                // Within 1%, a whole number of octaves apart.
+                let agree = |a: f64, b: f64| {
+                    let octaves = (a / b).log2();
+                    (octaves - octaves.round()).abs() < 0.014
+                };
+                let common = heard
+                    .iter()
+                    .copied()
+                    .max_by_key(|&a| heard.iter().filter(|&&b| agree(a, b)).count());
+                let strays = common.map_or(0, |c| heard.iter().filter(|&&b| !agree(c, b)).count());
+                // The coarser grid's beat nearest the overlap's middle, from the
+                // second window's start, against the finer's.
+                let pairs: Vec<(Beats, Beats)> = found
+                    .windows(2)
+                    .filter_map(|w| Some((w[0]?, w[1]?)))
+                    .collect();
+                let off = pairs
+                    .iter()
+                    .filter(|(a, b)| {
+                        let a = Beats {
+                            first: a.first - half as f64,
+                            ..*a
+                        };
+                        let (coarse, fine) = if a.period > b.period {
+                            (a, *b)
+                        } else {
+                            (*b, a)
+                        };
+                        let k = ((half as f64 / 2.0 - coarse.first) / coarse.period).round();
+                        let t = coarse.first + k * coarse.period - fine.first;
+                        off_grid(t, 0.0, fine.period) > 0.015 * rate
+                    })
+                    .count();
+                let tempos: Vec<String> = found
+                    .iter()
+                    .map(|b| {
+                        b.map_or("-".into(), |b| {
+                            let bars = if b.downbeat.is_some() { "b" } else { "" };
+                            format!("{:.1}{bars}", bpm(&b))
+                        })
+                    })
+                    .collect();
+                println!(
+                    "  {secs} s: {}/{} at {:.1}, {strays} astray, {off}/{} neighbours off, {took:.1?} each: {}",
+                    heard.len(),
+                    found.len(),
+                    common.unwrap_or(0.0),
+                    pairs.len(),
+                    tempos.join(" ")
+                );
+            }
+        }
     }
 }

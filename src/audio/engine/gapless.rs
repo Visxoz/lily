@@ -930,21 +930,7 @@ mod tests {
         }
         let _ = log::set_logger(&Print);
         log::set_max_level(log::LevelFilter::Debug);
-        let dir = std::env::var_os("LILY_MIX_DIR").map_or_else(
-            || crate::settings::data_dir().join("downloads"),
-            PathBuf::from,
-        );
-        let audio = ["webm", "m4a", "mp4", "opus", "ogg", "mp3", "flac", "wav"];
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| Some(e.ok()?.path()))
-            .filter(|p| {
-                p.extension()
-                    .is_some_and(|e| audio.iter().any(|a| e.eq_ignore_ascii_case(a)))
-            })
-            .collect();
-        files.sort();
-        assert!(!files.is_empty(), "no audio in {}", dir.display());
+        let files = super::super::automix::tests::mix_files();
         let pairs: Vec<(usize, usize)> = if files.len() == 1 {
             vec![(0, 0)]
         } else {
