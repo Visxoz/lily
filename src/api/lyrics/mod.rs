@@ -58,8 +58,8 @@ impl Lyrics {
     }
 
     /// Sung spans, sorted and merged: word timing where present, else each
-    /// line to its end, or a guess of `LINE_SECS`, but never past the next;
-    /// `None` if untimed.
+    /// line to its end, at most `LINE_SECS` and never past the next; `None`
+    /// if untimed.
     pub fn sung(&self) -> Option<Vec<Range<f64>>> {
         if !self.is_synced() {
             return None;
@@ -72,11 +72,12 @@ impl Lyrics {
                 // A blank or "♪" line is a break, which still ends the one before.
                 None if line.chars().any(char::is_alphanumeric) => {
                     let next = self.starts.get(i + 1).copied().unwrap_or(f64::INFINITY);
-                    // An end may run on to the next line, which starts its own span.
+                    // YouTube's ends often run on to the next line, across a break.
                     let end = ends
                         .map(|ends| ends[i])
                         .filter(|&end| end > start)
-                        .unwrap_or(start + LINE_SECS)
+                        .unwrap_or(f64::INFINITY)
+                        .min(start + LINE_SECS)
                         .min(next);
                     spans.push(start..end);
                 }
@@ -96,8 +97,7 @@ impl Lyrics {
     }
 }
 
-/// How long a line without an end counts as sung, as one before a break runs
-/// on to it.
+/// How long a line counts as sung at most, in seconds.
 const LINE_SECS: f64 = 5.0;
 /// Sung spans closer than this are one, as a breath isn't a gap.
 const SUNG_GAP_SECS: f64 = 0.6;
@@ -272,18 +272,18 @@ mod tests {
     #[test]
     fn sung_by_lines_ends_where_they_end() {
         let lyrics = Lyrics {
-            // Shorter than the guess, longer, past the next line, and not
-            // after its start.
+            // Shorter than the cap, longer, past the next line, and not after
+            // its start.
             ends: vec![3.0, 11.0, 20.0, 40.0, 31.0, 34.0],
             ..timed_lines(
                 &["One", "♪", "Two", "Three", "♪", "Four"],
-                &[0.0, 10.0, 12.0, 22.0, 30.0, 35.0],
+                &[0.0, 10.0, 12.0, 22.0, 25.0, 35.0],
                 Vec::new(),
             )
         };
         assert_eq!(
             lyrics.sung(),
-            Some(vec![0.0..3.0, 12.0..20.0, 22.0..30.0, 35.0..40.0])
+            Some(vec![0.0..3.0, 12.0..17.0, 22.0..25.0, 35.0..40.0])
         );
     }
 

@@ -79,7 +79,7 @@ pub struct Opening {
 
 /// Where the two songs of a blend are sung, in song seconds, from their timed
 /// lyrics; `None` where unknown. Only Automix reads it.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Sung {
     pub current: Option<Vec<Range<f64>>>,
     pub next: Option<Vec<Range<f64>>>,

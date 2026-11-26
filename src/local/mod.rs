@@ -269,6 +269,11 @@ pub(crate) mod tests {
         std::fs::write(path, wav).unwrap();
     }
 
+    /// The file's length to the second, as its tags are read.
+    pub(crate) fn secs(path: &Path) -> Option<u32> {
+        read_song(path).ok()??.track.duration
+    }
+
     #[test]
     fn reads_an_untagged_file_by_its_name() {
         let dir = std::env::temp_dir().join(format!("lily-untagged-{}", std::process::id()));

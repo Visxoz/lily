@@ -58,20 +58,29 @@ impl App {
         let ids = {
             let mut guard = self.state.borrow_mut();
             let state = &mut *guard;
-            if next_transition(state) != Transition::Automix {
+            let playing = [state.queue.current(), state.queue.peek_next()];
+            let wanted = |id: &String| playing.iter().flatten().any(|t| t.id == *id);
+            // An aborted lookup never answers, so its song is asked afresh.
+            state.sung_fetching.retain(|id, handle| {
+                let keep = wanted(id);
+                if !keep {
+                    handle.abort();
+                    state.sung_spans.remove(id);
+                }
+                keep
+            });
+            // "End of song" never plays the next.
+            if state.sleep == Some(Sleep::EndOfSong)
+                || next_transition(state) != Transition::Automix
+            {
                 return;
             }
-            let playing = [state.queue.current(), state.queue.peek_next()];
             if state.sung_spans.len() >= SUNG_LIMIT {
-                let kept = |id: &String| playing.iter().flatten().any(|t| t.id == *id);
-                state.sung_spans.retain(|id, _| kept(id));
+                state.sung_spans.retain(|id, _| wanted(id));
             }
             let mut ids = Vec::new();
             for track in playing.into_iter().flatten() {
-                // A music video is left for its song version, and a local
-                // file's name never leaves. One the panel is fetching is taken
-                // from it as it lands, or asked at the next track start should
-                // leaving the song abort it.
+                // Not videos or local files; the panel's fetch calls back.
                 if track.video
                     || !api::is_video_id(&track.id)
                     || state.sung_spans.contains_key(&track.id)
@@ -96,13 +105,19 @@ impl App {
             };
             // Keyed by song, so a late answer only changes the map. A failure
             // stays unknown, so queue edits offline don't ask again.
-            self.spawn(work, move |app, result| {
-                let spans = result.unwrap_or_else(|e| {
-                    log::debug!("{id}: could not find where it is sung: {e}");
-                    None
-                });
-                app.state.borrow_mut().sung_spans.insert(id, spans);
+            let handle = self.spawn(work, {
+                let id = id.clone();
+                move |app, result| {
+                    let spans = result.unwrap_or_else(|e| {
+                        log::debug!("{id}: could not find where it is sung: {e}");
+                        None
+                    });
+                    let mut state = app.state.borrow_mut();
+                    state.sung_fetching.remove(&id);
+                    state.sung_spans.insert(id, spans);
+                }
             });
+            self.state.borrow_mut().sung_fetching.insert(id, handle);
         }
     }
 

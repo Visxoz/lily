@@ -202,6 +202,7 @@ impl App {
                 playback: Playback::default(),
                 lyrics: Default::default(),
                 sung_spans: HashMap::new(),
+                sung_fetching: HashMap::new(),
                 suggest_generation: 0,
                 page_cache: HashMap::new(),
                 song_versions: HashMap::new(),

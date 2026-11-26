@@ -63,7 +63,8 @@ pub(super) struct Warp {
 
 impl Warp {
     fn song_frames(self, played: u64) -> f64 {
-        let warped = played.clamp(self.from, self.until) - self.from;
+        // Never panics, unlike a clamp, as this runs in the device callback.
+        let warped = played.min(self.until).saturating_sub(self.from);
         (played - warped) as f64 + self.curve.song_frames(warped as f64)
     }
 }

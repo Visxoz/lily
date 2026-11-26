@@ -7,6 +7,8 @@ use std::{
     time::Instant,
 };
 
+use tokio::task::AbortHandle;
+
 use super::{account, now_playing, playback, playback::song_version::SongVersion, session};
 use crate::{
     api::{self, Card, Page, Route, Track},
@@ -161,6 +163,8 @@ pub(super) struct State {
     /// Where songs are sung, for Automix; `None` while asking, untimed or
     /// failed.
     pub(super) sung_spans: HashMap<String, Option<Vec<Range<f64>>>>,
+    /// The `sung_spans` lookups in flight, by song.
+    pub(super) sung_fetching: HashMap<String, AbortHandle>,
     pub(super) suggest_generation: u64,
     pub(super) page_cache: HashMap<Route, (Page, Instant)>,
     /// Music videos looked up for a song version, by video ID.

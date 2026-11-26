@@ -17,14 +17,13 @@ pub(super) const INTRO_SECS: f64 = MAX_SECS;
 /// The shortest and longest blends, in seconds.
 const MIN_SECS: f64 = 3.0;
 const MAX_SECS: f64 = 12.0;
-/// Analysis steps a second: 2.5 ms, so two tracks' beats, each placed to a
-/// step, line up within 5 ms, short of a flam.
+/// Analysis steps a second: 2.5 ms, so beats fitted within a step line two
+/// tracks up within a few ms, short of a flam.
 const HOPS_PER_SEC: u32 = 400;
 /// Loudness is judged over half a second, so a lone hit or gap isn't.
 const SMOOTH_HOPS: usize = HOPS_PER_SEC as usize / 2;
-/// An onset is the energy of the last 10 ms rising over the loudest 10 ms of
-/// the 80 ms before, so a kick stands out of the bass held under it, while a
-/// held note's ripple, which peaks every waveform, never tops its last peak.
+/// An onset is the last 10 ms topping the loudest 10 ms of the 80 ms before,
+/// so a kick stands out of a bass line, and a held note's ripple never does.
 const RECENT_HOPS: usize = HOPS_PER_SEC as usize / 100;
 const BEFORE_HOPS: usize = HOPS_PER_SEC as usize * 8 / 100;
 /// The least rise that counts, in bels (3 dB), below which noise wavers.
@@ -54,9 +53,8 @@ const FADED_DB: f32 = 20.0;
 const MIN_BPM: f64 = 70.0;
 const MAX_BPM: f64 = 180.0;
 const LIKELY_BPM: f64 = 120.0;
-/// How regular the onsets must be to count as a beat: their correlation
-/// one beat apart, from 0 for noise to 1 for a metronome. The grid's own
-/// checks reject what passes wrongly, so this only spares them noise.
+/// The least correlation of onsets a beat apart (0 noise, 1 a metronome); the
+/// grid's own checks reject what passes wrongly, so this only spares them noise.
 const MIN_PULSE: f64 = 0.25;
 /// How far onsets are spread either side, in hops, for finding the tempo, so
 /// hits whose attack is drawn out or played a little off still line up.
@@ -95,7 +93,7 @@ const BAR_CLARITY: f64 = 1.5;
 /// Blend lengths of this many bars are the likeliest a DJ plays.
 const PHRASE_BARS: [f64; 2] = [4.0, 8.0];
 /// The most the outgoing's tempo is changed to meet the incoming's.
-const MAX_VARISPEED: f64 = 0.06;
+pub(super) const MAX_VARISPEED: f64 = 0.06;
 /// The least a tempo change takes, in seconds, in whole bars of at least two
 /// where there are bars.
 const RAMP_SECS: f64 = 4.0;
@@ -125,11 +123,11 @@ const OPEN_BY: f32 = 0.6;
 const FILTERED_BY: f32 = 0.25;
 /// How often a sweep's filters are retuned, in frames.
 const RETUNE_FRAMES: usize = 32;
-/// Where skewed curves have the outgoing out and the incoming in from, as a
-/// share of the blend, so two voices barely overlap.
+/// Where skewed curves have the outgoing out and the incoming in from, as a share
+/// of the blend, so two voices barely overlap; equal power between 0.4 and 0.6.
 const SKEW: f32 = 0.6;
-/// How much later than its timing says the outgoing's singing may end, in
-/// seconds: line-timed lyrics hold each line until the next.
+/// How far past its timing the outgoing's singing may run into the blend, in
+/// seconds, as line-timed lyrics hold each line until the next, past its end.
 const SUNG_SLACK_SECS: f64 = 1.5;
 /// Where the bass splits from the rest, in Hz.
 const BASS_HZ: f32 = 160.0;
@@ -166,7 +164,7 @@ impl Lows {
     fn run(&mut self, x: f32) -> f32 {
         self.a += self.coeff * (x - self.a);
         self.b += self.coeff * (self.a - self.b);
-        if self.b.abs() < DENORMAL {
+        if self.a.abs() < DENORMAL && self.b.abs() < DENORMAL {
             (self.a, self.b) = (0.0, 0.0);
         }
         self.b
@@ -286,23 +284,20 @@ pub(super) fn analyse(samples: &[f32], rate: u32, channels: usize) -> Analysis {
             sums.push(sums[sums.len() - 1] + f64::from(e / hop as f32));
         }
     }
-    // The bass's rises for kicks, the highs' for snares and hats, the
-    // whole's for the rest, taken where they step up, as a capped rise stays
-    // flat while its hit is recent. The bass's uncapped, which an accent
-    // shows in, mark the downbeats.
-    let (all_recent, low_recent, high_recent) = (recent(&all), recent(&low), recent(&high));
+    // Where the bass's, highs' and whole's capped rises step up, as each stays
+    // flat while its hit is recent; the bass's uncapped mark the downbeats.
     let mut last = 0.0;
     let (mut onsets, mut hits) = (Vec::with_capacity(hops), Vec::with_capacity(hops));
     for i in 0..hops {
-        let (bass, hit) = rise(&low_recent, i);
-        let r = rise(&all_recent, i).0 + bass + rise(&high_recent, i).0;
+        let (bass, hit) = rise(&low, i);
+        let r = rise(&all, i).0 + bass + rise(&high, i).0;
         onsets.push((r - last).max(0.0));
         hits.push(hit);
         last = r;
     }
     let beats = beats(&onsets, &hits, f64::from(rate) / hop as f64).map(|b| Beats {
-        period: b.period * hop as f64,
-        first: b.first * hop as f64,
+        period: b.0 * hop as f64,
+        first: b.1 * hop as f64,
         downbeat: downbeat(&hits, b).map(|d| d * hop as f64),
     });
     let level = smooth(&all);
@@ -337,44 +332,37 @@ fn bels(energy: f64) -> f32 {
     (energy as f32).max(FLOOR).log10()
 }
 
-/// The energy of `RECENT_HOPS` from each hop on, from running `sums`.
-fn recent(sums: &[f64]) -> Vec<f64> {
-    sums.windows(RECENT_HOPS + 1)
-        .map(|w| w[RECENT_HOPS] - w[0])
-        .collect()
-}
-
 /// How far hop `i` and those just before it rise over the loudest stretch as
-/// long before them, from `recent`'s sums: in bels past `MIN_RISE` and up to
+/// long before them, from running `sums`: in bels past `MIN_RISE` and up to
 /// `MAX_RISE`, and in energy; none this early in.
-fn rise(recent: &[f64], i: usize) -> (f32, f32) {
+fn rise(sums: &[f64], i: usize) -> (f32, f32) {
     let Some(before) = (i + 1).checked_sub(RECENT_HOPS + BEFORE_HOPS) else {
         return (0.0, 0.0);
     };
     let from = before + BEFORE_HOPS;
+    let energy = |j: usize| sums[j + RECENT_HOPS] - sums[j];
+    let loudest = (before..=from - RECENT_HOPS)
+        .map(energy)
+        .fold(0.0, f64::max);
+    let now = energy(from);
+    // Per hop, so silence floors where the level's does.
     let width = RECENT_HOPS as f64;
-    let loudest = recent[before..=from - RECENT_HOPS]
-        .iter()
-        .copied()
-        .fold(0.0, f64::max)
-        / width;
-    let now = recent[from] / width;
-    let rise = bels(now) - bels(loudest);
+    let rise = bels(now / width) - bels(loudest / width);
     (
         (rise.min(MAX_RISE) - MIN_RISE).max(0.0),
         (now - loudest).max(0.0) as f32,
     )
 }
 
-/// The first downbeat of `beats`, in hops: of the bar's four beats, the one
-/// whose bass `hits` are clearly the strongest, taking bars as of four.
-fn downbeat(hits: &[f32], beats: Beats) -> Option<f64> {
-    let bar = (4.0 * beats.period, beats.first);
+/// The first downbeat of the beats `(period, first)`, in hops: of the bar's
+/// four beats, the one whose bass `hits` are clearly the strongest.
+fn downbeat(hits: &[f32], (period, first): (f64, f64)) -> Option<f64> {
+    let bar = (4.0 * period, first);
     let weights: [f64; 4] = std::array::from_fn(|p| near(hits, bar, p as f64 / 4.0));
     let mut sorted = weights;
     sorted.sort_by(|a, b| b.total_cmp(a));
     let p = weights.iter().position(|&w| w == sorted[0])?;
-    (sorted[0] > BAR_CLARITY * sorted[1]).then_some(beats.first + p as f64 * beats.period)
+    (sorted[0] > BAR_CLARITY * sorted[1]).then_some(first + p as f64 * period)
 }
 
 /// Each hop's energy averaged over `SMOOTH_HOPS` around it, in dB.
@@ -388,10 +376,11 @@ fn smooth(sums: &[f64]) -> Vec<f32> {
         .collect()
 }
 
-/// The beat in `onsets`, in hops: the comb grid near the likeliest lag, fitted
-/// through its onsets, and narrowed should it hold one and a half beats or two.
-/// None unless the pulse is regular and the stretches keep to it.
-fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<Beats> {
+/// The beat in `onsets` as `(period, first)`, in hops: the comb grid near the
+/// likeliest lag, fitted through its onsets, and narrowed (else none) should it
+/// hold one and a half beats or two. None unless the pulse is regular and the
+/// stretches keep to it.
+fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<(f64, f64)> {
     let n = onsets.len();
     let min_lag = (60.0 * hops_per_sec / MAX_BPM).floor() as usize;
     let max_lag = (60.0 * hops_per_sec / MIN_BPM).ceil() as usize;
@@ -400,7 +389,7 @@ fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<Beats> {
         return None;
     }
     let blurred = spread(onsets);
-    let average = blurred.iter().map(|&o| f64::from(o)).sum::<f64>() / n as f64;
+    let average = total(&blurred) / n as f64;
     let d: Vec<f64> = blurred.iter().map(|&o| f64::from(o) - average).collect();
     let power: f64 = d.iter().map(|x| x * x).sum();
     if power <= 0.0 {
@@ -425,24 +414,20 @@ fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<Beats> {
         return None;
     }
     let mut beat = grid(onsets, &blurred, lag as f64)?;
-    // A grid whose beats each third of the way to the next carry onset too is
-    // a beat and a half, as a 3-3-2 rhythm makes it, or a beat under triplets.
-    // The beat within is taken only should it find more bass a beat, which
-    // under triplets it can't, as it holds only every other beat.
-    if near(onsets, beat, 1.0 / 3.0).min(near(onsets, beat, 2.0 / 3.0))
-        >= THIRDS * near(onsets, beat, 0.0)
-    {
+    let mut on = near(onsets, beat, 0.0);
+    // Onset a third and two thirds between beats makes a beat and a half (3-3-2)
+    // or a beat under triplets; only the former finds more bass a beat within.
+    if near(onsets, beat, 1.0 / 3.0).min(near(onsets, beat, 2.0 / 3.0)) >= THIRDS * on {
         let fine = finer(onsets, &blurred, beat.0 * 2.0 / 3.0, min_lag)?;
         let per_beat = |g: (f64, f64)| near(hits, g, 0.0) * g.0;
         if per_beat(fine) <= per_beat(beat) {
             return None;
         }
         beat = fine;
+        on = near(onsets, beat, 0.0);
     }
-    // One whose off-beats carry nearly as much, the bass's too, is two beats, its
-    // phase a toss-up, and taken at the beat within or left.
-    if near(onsets, beat, 0.5) >= HALF * near(onsets, beat, 0.0)
-        && near(hits, beat, 0.5) >= HALF * near(hits, beat, 0.0)
+    // Off-beats nearly as strong, the bass's too, make it two beats, phase a toss-up.
+    if near(onsets, beat, 0.5) >= HALF * on && near(hits, beat, 0.5) >= HALF * near(hits, beat, 0.0)
     {
         beat = finer(onsets, &blurred, beat.0 / 2.0, min_lag)?;
     }
@@ -451,23 +436,29 @@ fn beats(onsets: &[f32], hits: &[f32], hops_per_sec: f64) -> Option<Beats> {
 
 /// The grid near `lag`, should it be no shorter than `min_lag`.
 fn finer(onsets: &[f32], blurred: &[f32], lag: f64, min_lag: usize) -> Option<(f64, f64)> {
-    (lag >= min_lag as f64).then(|| grid(onsets, blurred, lag))?
+    if lag < min_lag as f64 {
+        return None;
+    }
+    grid(onsets, blurred, lag)
 }
 
 /// The onset of `of` near the beats of `grid`, moved on by `shift` beats.
 fn near(of: &[f32], (period, anchor): (f64, f64), shift: f64) -> f64 {
     centres(of, (period, anchor + shift * period))
-        .iter()
         .map(|t| t.mass)
         .sum()
+}
+
+/// The sum of `x`, in f64.
+fn total(x: &[f32]) -> f64 {
+    x.iter().map(|&o| f64::from(o)).sum()
 }
 
 /// The grid `(period, anchor)` near `lag` gathering the most of `blurred`,
 /// fitted through `onsets`.
 fn grid(onsets: &[f32], blurred: &[f32], lag: f64) -> Option<(f64, f64)> {
-    // A whole-hop lag drifts off the beat over the window, so the period is
-    // sought to a fiftieth of a hop. Anchored mid-window, the best anchor
-    // barely moves with the period, so it is sought only near the lag's.
+    // To a fiftieth of a hop, as a whole-hop lag drifts off the beat; anchored
+    // mid-window, the anchor barely moves with the period, so stays near the lag's.
     let (mid, half) = ((onsets.len() / 2) as i32, lag as i32 / 2);
     let (_, rough) = best(blurred, [lag], mid - half..=mid + half)?;
     let periods = (-50 * SEARCH_HOPS..=50 * SEARCH_HOPS).map(|step| lag + f64::from(step) / 50.0);
@@ -477,31 +468,31 @@ fn grid(onsets: &[f32], blurred: &[f32], lag: f64) -> Option<(f64, f64)> {
     // errors, so the grid is refitted through each beat's own onsets.
     let mut grid = (period, f64::from(anchor));
     for _ in 0..2 {
-        grid = fit(&centres(onsets, grid))?;
+        grid = fit(&centres(onsets, grid).collect::<Vec<_>>())?;
     }
     Some(grid)
 }
 
-/// `grid` as beats, should enough of them sound and the stretches keep to it.
-fn steady(onsets: &[f32], grid: (f64, f64), hops_per_sec: f64) -> Option<Beats> {
+/// `grid` as `(period, first)`, should enough beats sound and the stretches
+/// keep to it.
+fn steady(onsets: &[f32], grid: (f64, f64), hops_per_sec: f64) -> Option<(f64, f64)> {
     let n = onsets.len();
     let (period, anchor) = grid;
     // A few hits alone space out a tempo of their own.
-    let teeth = centres(onsets, grid);
+    let teeth: Vec<_> = centres(onsets, grid).collect();
     let typical = teeth.iter().map(|t| t.mass).sum::<f64>() / teeth.len() as f64;
     if teeth.iter().filter(|t| t.mass >= typical / 2.0).count() < MIN_BEATS {
         return None;
     }
-    // A period a little off, or a wandering tempo, leaves some stretch off the
-    // grid. A stretch on the off-beats, as in a breakdown, passes only between
-    // stretches on the beat, as at either end the beat may have moved.
-    let off_beats = centres(onsets, (period, anchor + period / 2.0));
+    // A period a little off, or a wandering tempo, leaves a stretch off the grid;
+    // off-beat stretches, as in a breakdown, pass only between ones on the beat.
+    let off_beats: Vec<_> = centres(onsets, (period, anchor + period / 2.0)).collect();
     let stretches = ((n as f64 / (STRETCH_SECS * hops_per_sec)).round() as usize).max(1);
-    let share = onsets.iter().map(|&o| f64::from(o)).sum::<f64>() / (2 * stretches) as f64;
+    let share = total(onsets) / (2 * stretches) as f64;
     let (mut kept, mut lost, mut ends_off) = (0.0, 0.0, false);
     for i in 0..stretches {
         let hops = i * n / stretches..(i + 1) * n / stretches;
-        let mass: f64 = onsets[hops.clone()].iter().map(|&o| f64::from(o)).sum();
+        let mass = total(&onsets[hops.clone()]);
         let keeps = |teeth: &[Tooth], anchor: f64| {
             let (on, off) = teeth
                 .iter()
@@ -524,11 +515,7 @@ fn steady(onsets: &[f32], grid: (f64, f64), hops_per_sec: f64) -> Option<Beats> 
             return None;
         }
     }
-    (!ends_off && kept >= KEPT_SHARE * (kept + lost)).then_some(Beats {
-        period,
-        first: anchor.rem_euclid(period),
-        downbeat: None,
-    })
+    (!ends_off && kept >= KEPT_SHARE * (kept + lost)).then_some((period, anchor.rem_euclid(period)))
 }
 
 /// The period from `periods` and anchor from `anchors` whose grid gathers the
@@ -553,7 +540,6 @@ fn comb(onsets: &[f32], period: f64, anchor: i32) -> f32 {
     (0..)
         .map(|k| (anchor + (from + f64::from(k)) * period).round())
         .take_while(|&t| t < onsets.len() as f64)
-        .filter(|&t| t >= 0.0)
         .map(|t| onsets[t as usize])
         .sum()
 }
@@ -567,10 +553,10 @@ struct Tooth {
 }
 
 /// The beats of a grid `(period, anchor)` that have onset near them.
-fn centres(onsets: &[f32], (period, anchor): (f64, f64)) -> Vec<Tooth> {
+fn centres(onsets: &[f32], (period, anchor): (f64, f64)) -> impl Iterator<Item = Tooth> {
     let last = onsets.len() as f64 - 1.0;
     let ks = (-anchor / period).ceil() as i64..=((last - anchor) / period).floor() as i64;
-    ks.filter_map(|k| {
+    ks.filter_map(move |k| {
         let k = k as f64;
         let beat = anchor + k * period;
         let hops = (beat - CENTRE_HOPS).ceil().max(0.0) as usize
@@ -585,7 +571,6 @@ fn centres(onsets: &[f32], (period, anchor): (f64, f64)) -> Vec<Tooth> {
             mass,
         })
     })
-    .collect()
 }
 
 /// The grid through `teeth` by least squares, each weighted by its onset:
@@ -618,9 +603,8 @@ fn spread(onsets: &[f32]) -> Vec<f32> {
 }
 
 impl Analysis {
-    /// Frames the track fades out over: from an end `FADED_DB` under its loud
-    /// level back to where its level last held, or last swelled; 0 for an
-    /// ending that stops or holds a softer level to the end.
+    /// Frames it fades out over, from an end `FADED_DB` under its loud level back
+    /// to where it last held or swelled; 0 for an ending that stops or holds.
     fn outro(&self) -> f64 {
         if self
             .level
@@ -674,14 +658,15 @@ impl Analysis {
             .map_or(self.frames as f64, |i| (i * self.hop) as f64)
     }
 
-    /// What an echo out replaces of a track on a beat that stops hard, with
-    /// no fade-out (`outro` 0) and its last second peaking within `HARD_DB`
-    /// of its loud level: its last up to `ECHO_BEATS` beats from a beat, and
-    /// the beat, in frames.
+    /// An echo out's last beats (up to `ECHO_BEATS`, from a beat) and beat, in
+    /// frames, for a beat ending hard: no fade-out, its last second near loud.
     fn echo(&self, max: f64, outro: f64) -> Option<(f64, f64)> {
         let last = self.level.len().saturating_sub(HOPS_PER_SEC as usize);
         let hard = outro == 0.0 && self.level[last..].iter().any(|&l| l >= self.loud - HARD_DB);
-        let beats = self.beats.filter(|_| hard)?;
+        if !hard {
+            return None;
+        }
+        let beats = self.beats?;
         let end = self.frames as f64;
         let k = ((end - ECHO_BEATS * beats.period - beats.first) / beats.period)
             .ceil()
@@ -830,9 +815,9 @@ impl Sync {
         }
     }
 
-    /// The blend no longer than the singing allows (`sung`) nearest `want`: on the bar where
-    /// there are bars, a phrase of 4 or 8 by up to half a bar further, else
-    /// on the beat; and whether on the bar.
+    /// The blend no longer than the singing allows (`sung`) nearest `want`:
+    /// on the bar where there are bars, a phrase of 4 or 8 by up to half a bar
+    /// further, else on the beat; and whether on the bar.
     fn pick(self, min: f64, sung: f64, want: f64) -> Option<(f64, bool)> {
         let max = sung.min(self.longest);
         let nearest = |lengths: Lengths, min: f64, phrase: bool| {
@@ -1157,9 +1142,9 @@ impl Sweep {
                     tune(&mut self.new, Pass::High, high);
                 }
             }
+            // Skewed, both curves run over the overlap alone, so the power holds.
             let (fade_in, fade_out) = if self.skew {
-                let fade_in = equal_power(((t - (1.0 - SKEW)) / SKEW).max(0.0)).0;
-                (fade_in, equal_power((t / SKEW).min(1.0)).1)
+                equal_power(((t - (1.0 - SKEW)) / (2.0 * SKEW - 1.0)).clamp(0.0, 1.0))
             } else {
                 equal_power(t)
             };
@@ -1182,14 +1167,15 @@ impl Sweep {
     }
 }
 
-/// The echo out of `beat`s over the blend's `frames`: its delay line,
-/// interleaved, each channel's damping, and the frames the beat sent to it
-/// fades in and out over.
+/// The echo out of `beat`s over the blend's `frames`.
 struct Echo {
     frames: usize,
     beat: usize,
+    /// The delay line, a beat long, interleaved.
     line: Vec<f32>,
+    /// Each channel's damping, so each repeat is darker and thinner.
     damp: [(Lows, Lows); 2],
+    /// Frames the beat sent fades in and out over, so the repeats don't click.
     edge: f32,
 }
 
@@ -1203,13 +1189,12 @@ impl Echo {
             // out; a blend of a beat does both.
             let (fade_in, dry, send) = if frame < beat {
                 let (fade_in, dry) = equal_power(frame as f32 / beat as f32);
-                // Eased in and out at the beat's ends, so the repeats don't click.
                 let send = ease((frame + 1) as f32 / edge) * ease((beat - frame) as f32 / edge);
                 (fade_in, dry, send)
             } else {
                 (1.0, 0.0, 0.0)
             };
-            let left = len - frame;
+            let left = len.saturating_sub(frame);
             let ring = if left < beat {
                 (left as f32 / beat as f32 * FRAC_PI_2).sin()
             } else {
@@ -1258,7 +1243,7 @@ pub(super) mod tests {
     }
 
     /// White noise in -0.5..0.5, the same from each `seed`.
-    fn white(seed: u32) -> impl FnMut() -> f32 {
+    pub(in crate::audio::engine) fn white(seed: u32) -> impl FnMut() -> f32 {
         let mut seed = seed;
         move || {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -1374,10 +1359,11 @@ pub(super) mod tests {
     fn hears_no_beat_in_noise_or_silence() {
         let beats = analysed(&noise(20.0, |_| 1.0)).beats;
         assert!(beats.is_none(), "noise: {beats:?}");
-        let silence = analysed(&vec![0.0; 48_000 * 20]);
+        let silence = analysed(&vec![0.0; RATE as usize * 2 * 20]);
         assert!(silence.beats.is_none(), "silence: {:?}", silence.beats);
         assert!(!silence.bass, "silence carries no bass");
-        let beats = analysed(&clicks(120.0, 0.0, 1.0)).beats;
+        // Six beats, so only the length check rejects it.
+        let beats = analysed(&clicks(120.0, 0.0, 3.0)).beats;
         assert!(beats.is_none(), "too short: {beats:?}");
     }
 
@@ -2056,7 +2042,8 @@ pub(super) mod tests {
         assert!(peak < 1.05, "peaked at {peak}");
     }
 
-    const STYLES: [Style; 4] = [
+    const STYLES: [Style; 5] = [
+        Style::CROSSFADE,
         Style::Blend {
             trade: Some((2_000, 500)),
         },

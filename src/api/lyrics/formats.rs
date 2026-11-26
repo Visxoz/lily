@@ -26,16 +26,18 @@ pub(super) fn ttml(text: &str, source: &str) -> Option<Lyrics> {
     if reader.lines.is_empty() {
         return None;
     }
-    let starts = if reader.timed {
-        reader.starts
+    // Ends only where every line has one, as YouTube's.
+    let (starts, ends) = if reader.timed {
+        let ends = reader.ends.into_iter().collect::<Option<_>>();
+        (reader.starts, ends.unwrap_or_default())
     } else {
-        Vec::new()
+        Default::default()
     };
     let [translations, romanised] = reader.extras.map(|lines| or_empty(lines, String::is_empty));
     Some(Lyrics {
         lines: reader.lines,
         starts,
-        ends: Vec::new(),
+        ends,
         words: or_empty(reader.words, Vec::is_empty),
         translations,
         romanised,
@@ -86,6 +88,7 @@ const ROMANISED: usize = 1;
 struct Reader<'a> {
     lines: Vec<String>,
     starts: Vec<f64>,
+    ends: Vec<Option<f64>>,
     words: Vec<Vec<Word>>,
     /// Each line's translation and romanisation.
     extras: [Vec<String>; 2],
@@ -101,6 +104,7 @@ struct Reader<'a> {
     /// The line's own translation and romanisation spans.
     inline: [String; 2],
     begin: Option<f64>,
+    end: Option<f64>,
     line_words: Vec<Word>,
     /// Text since the last span boundary, its whitespace collapsed.
     pending: String,
@@ -168,6 +172,7 @@ impl<'a> Reader<'a> {
             "p" if self.in_body => {
                 self.in_line = true;
                 self.begin = time(node, "begin");
+                self.end = time(node, "end");
                 self.key = attribute(node, "key");
             }
             "span" if self.in_line => {
@@ -266,6 +271,7 @@ impl<'a> Reader<'a> {
             }
             self.lines.push(text);
             self.starts.push(start);
+            self.ends.push(self.end);
             self.words.push(words);
         }
         self.in_line = false;
@@ -733,6 +739,7 @@ mod tests {
         let expected = Lyrics {
             lines: owned(&["Lorem ipsum dolor, sit", "Amet"]),
             starts: vec![1.0, 4.0],
+            ends: vec![3.0, 5.0],
             words,
             source: "Source: Apple Music".to_owned(),
             ..Lyrics::default()
@@ -793,11 +800,15 @@ mod tests {
         let expected = Lyrics {
             lines: owned(&["Lorem ipsum", "Dolor, sit & amet"]),
             starts: vec![1.0, 3.5],
+            ends: vec![2.0, 4.0],
             source: "Source: Apple Music".to_owned(),
             ..Lyrics::default()
         };
         assert_eq!(read, expected);
         assert!(read.is_synced());
+        let open = r#"<p begin="1.000" end="2.000">Lorem</p><p begin="3.000">Ipsum</p>"#;
+        let open = document(open, "", "Line").unwrap();
+        assert!(open.ends.is_empty(), "ends only where every line has one");
         let untimed = document("<p>Lorem</p><p>Ipsum</p>", "", "None").unwrap();
         assert!(!untimed.is_synced(), "unsynced without any times");
     }

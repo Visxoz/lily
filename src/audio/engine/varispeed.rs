@@ -1,8 +1,9 @@
 //! Automix's varispeed: the outgoing tail read faster or slower through a
 //! windowed-sinc interpolator, pitch following tempo as on a record.
 
-use std::{f64::consts::PI, ops::Range};
+use std::{f64::consts::PI, ops::Range, sync::LazyLock};
 
+use super::automix::MAX_VARISPEED;
 use crate::audio::output::Varispeed;
 
 /// The interpolator's taps: 8 either side of the point read.
@@ -12,10 +13,10 @@ pub(super) const REACH: usize = TAPS / 2 - 1;
 /// Kernels tabulated between two samples, interpolated between, so no tap
 /// needs a sine.
 const PHASES: usize = 64;
-/// The passband, of the input's Nyquist frequency, under the fastest
-/// speed's, though 16 taps roll off gently, so a little above 20 kHz folds
-/// back.
-const CUTOFF: f64 = 0.94;
+/// The passband, of the input's Nyquist, under the fastest speed's; 16 taps
+/// roll off gently, so a little above 20 kHz folds back.
+const CUTOFF: f64 = 1.0 / (1.0 + MAX_VARISPEED);
+static KERNELS: LazyLock<Vec<[f32; TAPS]>> = LazyLock::new(kernels);
 
 /// The output `frames`, counted from the curve's start, of interleaved
 /// `input` read from frame `start` on at `curve`'s speeds, for up to two
@@ -27,7 +28,7 @@ pub(super) fn resample(
     curve: Varispeed,
     frames: Range<usize>,
 ) -> impl Iterator<Item = f32> {
-    let table = kernels();
+    let table = &*KERNELS;
     let len = (input.len() / channels) as isize;
     frames.flat_map(move |t| {
         let mut kernel = [0f32; TAPS];
@@ -131,7 +132,13 @@ mod tests {
             speed: 1.0,
         };
         let out: Vec<f32> = resample(&input, 2, 0, curve, 0..4_800).collect();
-        for (i, (a, b)) in out.iter().zip(&input).enumerate().skip(32).take(4_700) {
+        for (i, (a, b)) in out
+            .iter()
+            .zip(&input)
+            .enumerate()
+            .skip(32)
+            .take(out.len() - 64)
+        {
             assert!((a - b).abs() < 2e-3, "{i}: {a} for {b}");
         }
     }
