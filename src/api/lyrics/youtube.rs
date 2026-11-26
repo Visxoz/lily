@@ -39,6 +39,7 @@ struct Line {
 #[serde(rename_all = "camelCase")]
 struct CueRange {
     start_time_milliseconds: String,
+    end_time_milliseconds: Option<String>,
 }
 
 /// The lyrics `browse_id` names as the Android app is given them, or
@@ -69,20 +70,19 @@ fn parse(json: &str) -> Option<Lyrics> {
     if data.timed_lyrics_data.is_empty() {
         return None;
     }
-    // Synced only if every line has its time.
-    let starts: Option<Vec<f64>> = data
-        .timed_lyrics_data
-        .iter()
-        .map(|line| {
-            let ms: u64 = line
-                .cue_range
-                .as_ref()?
-                .start_time_milliseconds
-                .parse()
-                .ok()?;
+    // Kept only if every line has its time.
+    let times = |time: fn(&CueRange) -> Option<&str>| -> Option<Vec<f64>> {
+        let seconds = |line: &Line| {
+            let ms: u64 = time(line.cue_range.as_ref()?)?.parse().ok()?;
             Some(ms as f64 / 1000.0)
-        })
-        .collect();
+        };
+        data.timed_lyrics_data.iter().map(seconds).collect()
+    };
+    let starts = times(|cue| Some(cue.start_time_milliseconds.as_str()));
+    let ends = starts
+        .is_some()
+        .then(|| times(|cue| cue.end_time_milliseconds.as_deref()))
+        .flatten();
     Some(Lyrics {
         lines: data
             .timed_lyrics_data
@@ -90,6 +90,7 @@ fn parse(json: &str) -> Option<Lyrics> {
             .map(|line| line.lyric_line)
             .collect(),
         starts: starts.unwrap_or_default(),
+        ends: ends.unwrap_or_default(),
         source: data.source_message,
         ..Lyrics::default()
     })
@@ -116,6 +117,7 @@ mod tests {
             Some(Lyrics {
                 lines: vec!["One".into(), "Two".into()],
                 starts: vec![1.5, 3.0],
+                ends: vec![3.0, 4.0],
                 source: "Source: Musixmatch".into(),
                 ..Lyrics::default()
             })
@@ -130,6 +132,18 @@ mod tests {
         let lyrics = parse(&json).unwrap();
         assert_eq!(lyrics.lines, ["One", "Two"]);
         assert!(lyrics.starts.is_empty(), "synced only when every line is");
+        assert!(lyrics.ends.is_empty());
+    }
+
+    #[test]
+    fn ends_are_kept_only_when_every_line_has_one() {
+        let json = response(
+            r#"{"lyricLine":"One","cueRange":{"startTimeMilliseconds":"1500","endTimeMilliseconds":"3000"}},
+               {"lyricLine":"Two","cueRange":{"startTimeMilliseconds":"3000"}}"#,
+        );
+        let lyrics = parse(&json).unwrap();
+        assert_eq!(lyrics.starts, [1.5, 3.0]);
+        assert!(lyrics.ends.is_empty());
     }
 
     #[test]

@@ -247,9 +247,8 @@ fn tracks<'a>(songs: impl Iterator<Item = &'a Song>) -> Vec<Track> {
 pub(crate) mod tests {
     use super::*;
 
-    /// A mono 16-bit WAV at 8 kHz of `samples`.
-    pub(crate) fn write_wav(path: &Path, samples: &[f32]) {
-        const RATE: u32 = 8000;
+    /// A 16-bit WAV of interleaved `samples`.
+    pub(crate) fn write_wav(path: &Path, samples: &[f32], rate: u32, channels: u16) {
         let data: Vec<u8> = samples
             .iter()
             .flat_map(|s| ((s * 32_767.0) as i16).to_le_bytes())
@@ -259,10 +258,10 @@ pub(crate) mod tests {
         wav.extend(b"WAVEfmt ");
         wav.extend(16u32.to_le_bytes());
         wav.extend(1u16.to_le_bytes()); // PCM
-        wav.extend(1u16.to_le_bytes()); // mono
-        wav.extend(RATE.to_le_bytes());
-        wav.extend((RATE * 2).to_le_bytes());
-        wav.extend(2u16.to_le_bytes());
+        wav.extend(channels.to_le_bytes());
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * 2 * u32::from(channels)).to_le_bytes());
+        wav.extend((2 * channels).to_le_bytes());
         wav.extend(16u16.to_le_bytes());
         wav.extend(b"data");
         wav.extend((data.len() as u32).to_le_bytes());
@@ -275,7 +274,7 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("lily-untagged-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Some Song.wav");
-        write_wav(&path, &[0.0; 16_000]);
+        write_wav(&path, &[0.0; 16_000], 8_000, 1);
         let (tracks, _) = Library::default().scan(std::slice::from_ref(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
         let [track] = tracks.as_slice() else {

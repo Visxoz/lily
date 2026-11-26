@@ -3,7 +3,6 @@
 
 use std::{
     collections::VecDeque,
-    f32::consts::FRAC_PI_2,
     sync::{
         Arc,
         mpsc::{self, Receiver},
@@ -13,14 +12,15 @@ use std::{
 
 use super::{
     BUFFER_AHEAD_SECS, Engine, Track,
-    automix::{self, Analysis, Trade},
+    automix::{self, Analysis, Mixer, Style, Voices},
+    varispeed,
 };
 use crate::audio::{
-    Opening, PlayerEvent, SILENCE_TRIM_SECS, Transition,
+    Opening, PlayerEvent, SILENCE_TRIM_SECS, Sung, Transition,
     decode::{Decoded, Decoder},
     loudness_gain,
     opus::MAX_FRAME,
-    output::Output,
+    output::{Output, Varispeed, Warp},
     source::{Download, StreamReader},
 };
 
@@ -42,6 +42,7 @@ pub(super) struct Next {
     hold: usize,
     /// A crossfade's length in samples; Automix plans its own.
     fade: usize,
+    sung: Sung,
 }
 
 pub(super) struct Opened {
@@ -57,13 +58,14 @@ pub(super) struct Opened {
 /// The end of the track fading out, mixed under the start of the next.
 pub(super) struct Fade {
     tail: Vec<f32>,
-    channels: usize,
     mixed: usize,
     /// The fading track's loudness correction over the next one's, as the
     /// device applies the next one's to the mix.
     old_gain: f32,
-    /// Automix's bass trade.
-    trade: Option<Trade>,
+    mixer: Mixer,
+    /// The tail as decoded from where Automix's varispeed starts, which an
+    /// undone switch restores; none without one, or once the switch is heard.
+    original: Option<VecDeque<f32>>,
 }
 
 impl Fade {
@@ -75,34 +77,21 @@ impl Fade {
         self.remaining() == 0
     }
 
-    /// Mixes the tail under `samples` in place. Equal-power curves keep the
-    /// loudness steady through the overlap, where linear ones dip midway.
+    /// Mixes the tail under `samples` in place.
     fn mix(&mut self, samples: &mut [f32]) {
         let n = samples.len().min(self.remaining());
-        let len = self.tail.len() as f32;
         let tail = &self.tail[self.mixed..self.mixed + n];
-        let frames = samples[..n]
-            .chunks_exact_mut(self.channels)
-            .zip(tail.chunks_exact(self.channels));
-        for (i, (new, old)) in frames.enumerate() {
-            let t = (self.mixed + i * self.channels) as f32 / len;
-            let (fade_in, fade_out) = (t * FRAC_PI_2).sin_cos();
-            let fade_out = fade_out * self.old_gain;
-            if let Some(trade) = &mut self.trade {
-                trade.mix(
-                    self.mixed / self.channels + i,
-                    new,
-                    old,
-                    (fade_in, fade_out),
-                );
-                continue;
-            }
-            for (sample, old) in new.iter_mut().zip(old) {
-                *sample = *sample * fade_in + old * fade_out;
-            }
-        }
+        self.mixer.mix(&mut samples[..n], tail, self.old_gain);
         self.mixed += n;
     }
+}
+
+/// A fade planned: the tail mixed under the next track, and for Automix's
+/// varispeed its curve and the tail as decoded from where it starts.
+struct Planned {
+    tail: Vec<f32>,
+    mixer: Mixer,
+    warp: Option<(Varispeed, VecDeque<f32>)>,
 }
 
 /// Interleaved samples in `secs` of audio, in whole frames.
@@ -190,6 +179,7 @@ impl Engine {
         opening: Opening,
         download: Arc<Download>,
         transition: Transition,
+        sung: Sung,
     ) {
         self.drop_next();
         let (rate, channels) = {
@@ -228,6 +218,7 @@ impl Engine {
             ready: None,
             hold,
             fade,
+            sung,
         });
     }
 
@@ -272,19 +263,27 @@ impl Engine {
         if !finished || !ready || self.previous.is_some() {
             return;
         }
-        let same_format = {
+        let (same_format, held_from) = {
             let output = self.shared.output.lock().unwrap();
+            // An undone switch's varispeed is still to be heard and counted.
+            if output.warp.is_some() {
+                return;
+            }
             let opened = self.next.as_ref().and_then(|n| n.ready.as_ref());
             let same_format = opened.is_some_and(|o| same_format(&o.decoder, &output));
             if !same_format && !(output.samples.is_empty() && self.held.is_empty()) {
                 return;
             }
-            same_format
+            // Where the held samples start, in song time.
+            let queued = output.samples.len() / output.channels.max(1);
+            let held_from = output.position() + queued as f64 / f64::from(output.rate.max(1));
+            (same_format, held_from)
         };
         let Some(Next {
             download,
             loudness,
             fade,
+            sung,
             ready:
                 Some(Opened {
                     decoder,
@@ -307,21 +306,31 @@ impl Engine {
         if same_format {
             // Planned before locking the output, which the device callback
             // waits on. What plays before the fade stays held, to spill.
-            let (fade, trade) = self.plan_fade(fade, intro.as_ref(), rate, channels);
-            let tail = self.held.split_off(self.held.len().saturating_sub(fade));
+            let voices = |tail_end| Voices::new(&sung, tail_end, skipped_secs, rate);
+            let planned = self.plan_fade(fade, intro.as_ref(), held_from, voices, rate, channels);
             let mut output = self.shared.output.lock().unwrap();
             let queued = ((output.samples.len() + self.held.len()) / channels) as u64;
-            output.switch_at = Some(output.frames_played + queued);
+            let switch_at = output.frames_played + queued;
+            output.switch_at = Some(switch_at);
             output.next_loudness = loudness;
             output.next_base_secs = skipped_secs;
+            // The ramp, the last of what is held, ends at the switch.
+            output.warp = planned
+                .as_ref()
+                .and_then(|p| p.warp.as_ref())
+                .map(|&(curve, _)| Warp {
+                    from: switch_at - curve.ramp as u64,
+                    until: switch_at,
+                    curve,
+                });
             drop(output);
-            if !tail.is_empty() {
+            if let Some(Planned { tail, mixer, warp }) = planned {
                 self.fade = Some(Fade {
-                    tail: tail.into(),
-                    channels,
+                    tail,
                     mixed: 0,
                     old_gain: self.shared.loudness() / self.shared.correction(loudness),
-                    trade,
+                    mixer,
+                    original: warp.map(|(_, original)| original),
                 });
             }
             self.previous = self.track.replace(track);
@@ -344,26 +353,73 @@ impl Engine {
         self.spill();
     }
 
-    /// Trims the held tail's trailing silence and gives the fade in samples: a
-    /// crossfade's own, or the one Automix plans, with its bass trade.
+    /// Trims the held tail's trailing silence and splits the fade off it: a
+    /// crossfade's own, or the one Automix plans from the held samples, which
+    /// start at song second `held_from`, and where the songs are sung by the
+    /// tail's end. Varispeed plays its ramp from what stays held.
     fn plan_fade(
         &mut self,
         fade: usize,
         intro: Option<&Analysis>,
+        held_from: f64,
+        voices: impl FnOnce(f64) -> Voices,
         rate: u32,
         channels: usize,
-    ) -> (usize, Option<Trade>) {
+    ) -> Option<Planned> {
         if fade == 0 && intro.is_none() {
-            return (0, None);
+            return None;
         }
         let trim = samples_in(SILENCE_TRIM_SECS, rate, channels);
         trim_silence(&mut self.held, channels, trim);
         let Some(intro) = intro else {
-            return (fade, None);
+            let tail: Vec<f32> = self
+                .held
+                .split_off(self.held.len().saturating_sub(fade))
+                .into();
+            return (!tail.is_empty()).then(|| Planned {
+                mixer: Mixer::new(tail.len() / channels, Style::CROSSFADE, rate, channels),
+                tail,
+                warp: None,
+            });
         };
-        let tail = automix::analyse(self.held.make_contiguous(), rate, channels);
-        let mix = automix::plan(&tail, intro, rate);
-        (mix.frames * channels, Some(Trade::new(mix, rate)))
+        let held = self.held.make_contiguous();
+        let tail_end = held_from + (held.len() / channels) as f64 / f64::from(rate);
+        let mix = automix::plan(
+            &automix::analyse(held, rate, channels),
+            intro,
+            rate,
+            voices(tail_end),
+        );
+        if mix.frames == 0 {
+            return None;
+        }
+        let mixer = Mixer::new(mix.frames, mix.style, rate, channels);
+        let Some((start, curve)) = mix.warp else {
+            let tail = self.held.split_off(self.held.len() - mix.frames * channels);
+            return Some(Planned {
+                tail: tail.into(),
+                mixer,
+                warp: None,
+            });
+        };
+        // Split off from as far back as the ramp's taps reach, so it is
+        // resampled straight into `held` as from the whole tail.
+        let from = start.saturating_sub(varispeed::REACH);
+        let lead = (start - from) * channels;
+        let mut original = self.held.split_off(from * channels);
+        let decoded: &[f32] = original.make_contiguous();
+        let (ramp, frames) = (curve.ramp as usize, mix.frames);
+        let resample = |range| varispeed::resample(decoded, channels, start - from, curve, range);
+        self.held.extend(&decoded[..lead]);
+        self.held.extend(resample(0..ramp));
+        let mut tail = Vec::with_capacity(frames * channels);
+        tail.extend(resample(ramp..ramp + frames));
+        original.drain(..lead);
+        Some(Planned {
+            tail,
+            mixer,
+            warp: Some((curve, original)),
+        })
     }
 
     /// Undoes a switch the listener has not heard yet: the queued track's
@@ -390,20 +446,42 @@ impl Engine {
         }
         // The previous track's samples before the switch are queued, then
         // held; its tail goes back after them.
+        let channels = output.channels;
+        // Song frames of the varispeed already queued, whose originals the
+        // rest carries on from.
+        let mut resume = 0;
         if let Some(at) = output.switch_at.take() {
             let frames = at.saturating_sub(output.frames_played) as usize;
-            let keep = frames * output.channels;
+            let keep = frames * channels;
             self.held
                 .truncate(keep.saturating_sub(output.samples.len()));
             output.samples.truncate(keep);
+            let queued = output.frames_played + (output.samples.len() / channels) as u64;
+            if let Some(warp) = output.warp {
+                if queued > warp.from {
+                    // Kept rather than cut, which could starve the device;
+                    // the pitch steps back to the song's, by up to 6%.
+                    self.held.clear();
+                    resume = warp.curve.song_frames((queued - warp.from) as f64).round() as usize;
+                    output.warp = Some(Warp {
+                        until: queued,
+                        ..warp
+                    });
+                } else {
+                    self.held.truncate((warp.from - queued) as usize * channels);
+                    output.warp = None;
+                }
+            }
         }
         // Unlocked, as the tail is megabytes to copy.
         drop(output);
         if let Some(fade) = self.fade.take() {
+            let mut restored = fade.original.unwrap_or_else(|| fade.tail.into());
+            restored.drain(..(resume * channels).min(restored.len()));
             if self.held.is_empty() {
-                self.held = fade.tail.into();
+                self.held = restored;
             } else {
-                self.held.extend(fade.tail);
+                self.held.extend(restored);
             }
         }
         true
@@ -415,6 +493,9 @@ impl Engine {
             self.previous = None;
             if self.fade.as_ref().is_some_and(Fade::done) {
                 self.fade = None;
+            } else if let Some(fade) = &mut self.fade {
+                // Heard, so never restored.
+                fade.original = None;
             }
             self.became_audible();
         }
@@ -494,6 +575,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use std::{
+        f32::consts::FRAC_PI_2,
         path::{Path, PathBuf},
         sync::Mutex,
         time::Duration,
@@ -511,8 +593,29 @@ mod tests {
                 (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
             })
             .collect();
+        written(name, &samples, 1)
+    }
+
+    /// Stereo 8 kHz clicks at `bpm`, `secs` long, the right half as loud, as
+    /// `track` writes them, over a floor too loud to trim as silence.
+    fn clicks(name: &str, bpm: f64, secs: f64) -> (PathBuf, Vec<f32>) {
+        let period = 60.0 / bpm * 8_000.0;
+        let samples: Vec<f32> = (0..(secs * 8_000.0) as usize)
+            .flat_map(|i| {
+                let s = if (i as f64 - 1_000.0).rem_euclid(period) < 40.0 {
+                    0.8
+                } else {
+                    0.002
+                };
+                [s, s / 2.0]
+            })
+            .collect();
+        written(name, &samples, 2)
+    }
+
+    fn written(name: &str, samples: &[f32], channels: u16) -> (PathBuf, Vec<f32>) {
         let path = std::env::temp_dir().join(format!("lily-{name}-{}.wav", std::process::id()));
-        crate::local::tests::write_wav(&path, &samples);
+        crate::local::tests::write_wav(&path, samples, 8_000, channels);
         let mut decoder = Decoder::open(Download::open(path.clone()).reader(), "").unwrap();
         let mut decoded = Vec::new();
         while let Ok(Decoded::Samples) = decoder.decode_next(&mut decoded) {}
@@ -530,20 +633,21 @@ mod tests {
 
     impl Run {
         fn new(first: &Path) -> Self {
+            let download = Download::open(first.to_owned());
+            let decoder = Decoder::open(download.reader(), "").unwrap();
             let shared = Arc::new(Shared::default());
             {
                 let mut output = shared.output.lock().unwrap();
-                (output.rate, output.channels, output.gain) = (8_000, 1, 1.0);
+                (output.rate, output.channels, output.gain) = (decoder.rate, decoder.channels, 1.0);
             }
             let events = Arc::new(Mutex::new(Vec::new()));
             let log = Arc::clone(&events);
             let on_event = move |e: PlayerEvent| log.lock().unwrap().push(format!("{e:?}"));
             let (_, rx) = mpsc::channel();
             let mut engine = Engine::new(rx, Arc::clone(&shared), Box::new(on_event));
-            let download = Download::open(first.to_owned());
             *shared.download.lock().unwrap() = Some(Arc::clone(&download));
             engine.track = Some(Track {
-                decoder: Decoder::open(download.reader(), "").unwrap(),
+                decoder,
                 download,
                 finished: false,
                 started: false,
@@ -567,8 +671,12 @@ mod tests {
                 loudness_db,
                 start_at: 0.0,
             };
-            self.engine
-                .queue(opening, Download::open(next.to_owned()), transition);
+            self.engine.queue(
+                opening,
+                Download::open(next.to_owned()),
+                transition,
+                Sung::default(),
+            );
         }
 
         /// Waits for the queued track to open.
@@ -581,6 +689,12 @@ mod tests {
 
         /// Plays until `stop` holds or nothing is left to play.
         fn play(&mut self, stop: impl Fn(&Engine, usize) -> bool) {
+            let (rate, channels) = {
+                let output = self.shared.output.lock().unwrap();
+                (output.rate, output.channels)
+            };
+            // 10 ms at a time.
+            let mut data = vec![0.0; rate as usize / 100 * channels];
             for _ in 0..1_000_000 {
                 if stop(&self.engine, self.heard.len()) {
                     return;
@@ -596,19 +710,18 @@ mod tests {
                 let queued = self.shared.output.lock().unwrap().samples.len();
                 // A packet over what the engine buffers ahead, never a hold.
                 assert!(
-                    queued <= samples_in(BUFFER_AHEAD_SECS + 0.5, 8_000, 1),
+                    queued <= samples_in(BUFFER_AHEAD_SECS + 0.5, rate, channels),
                     "device queue grew to {queued}"
                 );
-                let n = queued.min(80);
-                if n < 80 {
+                let n = queued.min(data.len());
+                if n < data.len() {
                     let done = self.engine.track.as_ref().is_none_or(|t| t.finished);
                     assert!(done && self.engine.held.is_empty(), "starved");
                 }
                 if n == 0 && self.engine.track.is_none() {
                     return;
                 }
-                let mut data = [0.0; 80];
-                fill(&self.shared, &mut data, 8_000);
+                fill(&self.shared, &mut data, rate);
                 self.heard.extend(&data[..n]);
             }
             panic!("never finished");
@@ -730,13 +843,138 @@ mod tests {
         undoes("undo-late", Transition::Automix, true);
     }
 
+    /// Where a switch is undone whose tail is sped up to the next track's
+    /// tempo: before its ramp reaches the device queue, part way up it, or
+    /// once the queue reaches into the blend after it.
+    #[derive(Debug, Clone, Copy)]
+    enum Undo {
+        Before,
+        During,
+        After,
+    }
+
+    /// Checks what is heard is the first track as decoded but for the
+    /// varispeed queued before the undo, carrying on from the song time it
+    /// reached, and that the position ends at the track's end. In stereo, so
+    /// samples and frames differ.
+    fn undoes_varispeed(at: Undo) {
+        let (a, first) = clicks(&format!("vs-{at:?}-a"), 120.0, 30.0);
+        let (b, _) = clicks(&format!("vs-{at:?}-b"), 123.0, 15.0);
+        let mut run = Run::new(&a);
+        run.queue(&b, Transition::Automix, None);
+        run.play(|engine, _| engine.previous.is_some());
+        let warp = run.shared.output.lock().unwrap().warp.expect("varispeed");
+        run.play(|engine, _| {
+            let o = engine.shared.output.lock().unwrap();
+            let queued = o.frames_played + (o.samples.len() / 2) as u64;
+            match at {
+                Undo::Before => true,
+                Undo::During => queued > warp.from + 8_000,
+                Undo::After => queued > warp.until + 800,
+            }
+        });
+        assert!(run.engine.undo_switch(), "{at:?}: undone");
+        let kept = run.shared.output.lock().unwrap().warp;
+        run.play(|_, _| false);
+        let position = run.shared.output.lock().unwrap().position();
+        let _ = (std::fs::remove_file(a), std::fs::remove_file(b));
+        let end = first.len() / 2;
+        let (from, until, resume) = kept.map_or((end, end, end), |w| {
+            let song = w.curve.song_frames((w.until - w.from) as f64).round() as usize;
+            (w.from as usize, w.until as usize, w.from as usize + song)
+        });
+        assert!(
+            matches!(at, Undo::Before) == kept.is_none(),
+            "{at:?}: {kept:?}"
+        );
+        assert!(
+            run.heard[..from * 2] == first[..from * 2],
+            "{at:?}: whole up to it"
+        );
+        assert!(
+            run.heard[until * 2..] == first[resume * 2..],
+            "{at:?}: then on from where it left off"
+        );
+        let secs = end as f64 / 8_000.0;
+        assert!(
+            (position - secs).abs() < 1e-3,
+            "{at:?}: ends at {position} s"
+        );
+        assert_eq!(run.events(), ["Started", "Ended"], "{at:?}");
+    }
+
+    #[test]
+    fn undoing_varispeed_restores_the_tail_as_decoded() {
+        for at in [Undo::Before, Undo::During, Undo::After] {
+            undoes_varispeed(at);
+        }
+    }
+
+    /// Mixes each audio file in `LILY_MIX_DIR`, else the app's downloads,
+    /// into the next, or a lone one into itself, from 40 s before its end to
+    /// about 20 s into the next, and writes what is heard to WAVs to hear.
+    #[test]
+    #[ignore = "renders real tracks, to listen to"]
+    fn renders_automixes() {
+        struct Print;
+        impl log::Log for Print {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.target().ends_with("automix")
+            }
+            fn log(&self, record: &log::Record) {
+                if self.enabled(record.metadata()) {
+                    println!("  {}", record.args());
+                }
+            }
+            fn flush(&self) {}
+        }
+        let _ = log::set_logger(&Print);
+        log::set_max_level(log::LevelFilter::Debug);
+        let dir = std::env::var_os("LILY_MIX_DIR").map_or_else(
+            || crate::settings::data_dir().join("downloads"),
+            PathBuf::from,
+        );
+        let audio = ["webm", "m4a", "mp4", "opus", "ogg", "mp3", "flac", "wav"];
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| Some(e.ok()?.path()))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| audio.iter().any(|a| e.eq_ignore_ascii_case(a)))
+            })
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no audio in {}", dir.display());
+        let pairs: Vec<(usize, usize)> = if files.len() == 1 {
+            vec![(0, 0)]
+        } else {
+            (1..files.len()).map(|i| (i - 1, i)).collect()
+        };
+        for (a, b) in pairs {
+            println!("{} into {}", files[a].display(), files[b].display());
+            let mut run = Run::new(&files[a]);
+            let secs = run.engine.track.as_ref().and_then(|t| t.decoder.secs());
+            run.engine.seek((secs.expect("its length") - 40.0).max(0.0));
+            run.queue(&files[b], Transition::Automix, None);
+            let (rate, channels) = {
+                let output = run.shared.output.lock().unwrap();
+                (output.rate, output.channels)
+            };
+            let wanted = samples_in(60.0, rate, channels);
+            run.play(|_, heard| heard >= wanted);
+            let path = std::env::temp_dir().join(format!("lily-automix-{a}-{b}.wav"));
+            crate::local::tests::write_wav(&path, &run.heard, rate, channels as u16);
+            println!("  wrote {}", path.display());
+        }
+    }
+
     fn fade(tail: Vec<f32>, old_gain: f32) -> Fade {
         Fade {
+            mixer: Mixer::new(tail.len() / 2, Style::CROSSFADE, 48_000, 2),
             tail,
-            channels: 2,
             mixed: 0,
             old_gain,
-            trade: None,
+            original: None,
         }
     }
 
@@ -779,13 +1017,14 @@ mod tests {
 
     #[test]
     fn trades_bass_across_packets_as_in_one() {
+        // Both bass, about 150 and 120 Hz, so it trades.
         let tail: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.01).sin()).collect();
-        let new: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.03).cos()).collect();
+        let new: Vec<f32> = (0..9_600).map(|i| (i as f32 * 0.008).cos()).collect();
         let plan = || {
             let analyse = |s: &[f32]| automix::analyse(s, 48_000, 2);
-            let mix = automix::plan(&analyse(&tail), &analyse(&new), 48_000);
+            let mix = automix::plan(&analyse(&tail), &analyse(&new), 48_000, Voices::default());
             Fade {
-                trade: Some(Trade::new(mix, 48_000)),
+                mixer: Mixer::new(mix.frames, mix.style, 48_000, 2),
                 ..fade(tail.clone(), 0.5)
             }
         };

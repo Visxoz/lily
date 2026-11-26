@@ -329,6 +329,7 @@ impl App {
         }
         self.load_image(art, images::PLAYER, |_, _| {});
         self.prefetch_lyrics();
+        self.prefetch_sung();
         let next = {
             let state = self.state.borrow();
             let Some(next) = state.queue.peek_next().cloned() else {

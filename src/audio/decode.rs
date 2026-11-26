@@ -163,6 +163,18 @@ impl Decoder {
         }
     }
 
+    /// The stream's length in seconds, where its container says.
+    #[cfg(test)]
+    pub fn secs(&self) -> Option<f64> {
+        // Matroska gives the length for the whole file only.
+        let track = self.format.tracks().iter().find(|t| t.id == self.track_id);
+        let media = self.format.media_info();
+        track
+            .and_then(|t| t.time_base?.calc_duration(t.duration?))
+            .or_else(|| media.time_base?.calc_duration(media.duration?))
+            .map(|t| t.as_secs_f64())
+    }
+
     /// Seeks to `secs` and returns the position actually reached.
     pub fn seek(&mut self, secs: f64) -> Result<f64, String> {
         let secs = secs.max(0.0);

@@ -3,6 +3,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    ops::Range,
     time::Instant,
 };
 
@@ -157,6 +158,9 @@ pub(super) struct State {
     pub(super) queue_generation: u64,
     pub(super) playback: Playback,
     pub(super) lyrics: now_playing::lyrics::Lyrics,
+    /// Where songs are sung, for Automix; `None` while asking, untimed or
+    /// failed.
+    pub(super) sung_spans: HashMap<String, Option<Vec<Range<f64>>>>,
     pub(super) suggest_generation: u64,
     pub(super) page_cache: HashMap<Route, (Page, Instant)>,
     /// Music videos looked up for a song version, by video ID.

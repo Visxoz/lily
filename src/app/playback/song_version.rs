@@ -123,6 +123,10 @@ impl App {
         }
         log::info!("{video_id}: playing its song version, {}", song.id);
         self.refresh_queue_rows(&rows);
+        // Both skipped the video; the panel's fetch goes first, so the song
+        // isn't asked for twice.
+        self.prefetch_lyrics();
+        self.prefetch_sung();
         true
     }
 }

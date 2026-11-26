@@ -2,7 +2,7 @@
 //! ahead for the next, the line and words being sung, and the lyrics hub's
 //! pass.
 
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{collections::HashMap, ops::Range, rc::Rc, time::Duration};
 
 use slint::{ComponentHandle, ModelRc, TimerMode, VecModel};
 use tokio::task::AbortHandle;
@@ -25,6 +25,18 @@ pub(in crate::app) struct Lyrics {
     /// `None` for a song without lyrics.
     cache: HashMap<String, Option<Rc<api::Lyrics>>>,
     fetching: HashMap<String, AbortHandle>,
+}
+
+impl Lyrics {
+    /// `id`'s sung spans by its kept lyrics, `None` if none are kept. Untimed
+    /// ones are final, as YouTube's timing is in them where it came.
+    pub(in crate::app) fn sung(&self, id: &str) -> Option<Option<Vec<Range<f64>>>> {
+        Some(self.cache.get(id)?.as_deref().and_then(api::Lyrics::sung))
+    }
+
+    pub(in crate::app) fn is_fetching(&self, id: &str) -> bool {
+        self.fetching.contains_key(id)
+    }
 }
 
 /// The lyrics hub's pass being checked for, one check at a time.
@@ -157,6 +169,8 @@ impl App {
                 Err(e) => self.show_message(&format!("Couldn't load lyrics: {e}")),
             }
         }
+        // `prefetch_sung` waited for these, or asks itself after a failure.
+        self.prefetch_sung();
         self.check_lyrics_pass();
     }
 

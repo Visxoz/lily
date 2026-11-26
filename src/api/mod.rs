@@ -8,7 +8,7 @@ pub mod lyrics;
 mod model;
 mod pages;
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use rustypipe::{
     client::{ClientType, RustyPipe, RustyPipeQuery},
@@ -232,6 +232,19 @@ impl Api {
             ..track.clone()
         };
         lyrics::find(&track, self.youtube_lyrics(details.lyrics_id)).await
+    }
+
+    /// Where a song is sung, by YouTube's timed lyrics. Never the hub, whose
+    /// pass check a song merely played shouldn't start.
+    pub async fn sung(&self, id: &str) -> Result<Option<Vec<Range<f64>>>> {
+        let details = self.q().music_details(video_id(id)?).await.map_err(err)?;
+        let Some(lyrics_id) = details.lyrics_id else {
+            return Ok(None);
+        };
+        Ok(lyrics::timed(&lyrics_id)
+            .await?
+            .as_ref()
+            .and_then(Lyrics::sung))
     }
 
     async fn youtube_lyrics(&self, lyrics_id: Option<String>) -> Result<Option<Lyrics>> {

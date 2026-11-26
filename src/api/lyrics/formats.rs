@@ -35,6 +35,7 @@ pub(super) fn ttml(text: &str, source: &str) -> Option<Lyrics> {
     Some(Lyrics {
         lines: reader.lines,
         starts,
+        ends: Vec::new(),
         words: or_empty(reader.words, Vec::is_empty),
         translations,
         romanised,

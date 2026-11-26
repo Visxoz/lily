@@ -32,6 +32,40 @@ pub(super) struct Output {
     pub(super) gain: f32,
     /// How far the limiter has the gain down from 1, at 0 while idle.
     pub(super) limiting: f32,
+    /// The current track's frames played faster or slower, Automix's
+    /// varispeed, so the position stays in song time.
+    pub(super) warp: Option<Warp>,
+}
+
+/// A speed ramping linearly from 1 to `speed` over `ramp` frames played,
+/// then held: pitch follows tempo, as on a record.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Varispeed {
+    pub(super) ramp: f64,
+    pub(super) speed: f64,
+}
+
+impl Varispeed {
+    /// The song frames heard over the first `t` frames played.
+    pub(super) fn song_frames(self, t: f64) -> f64 {
+        let r = t.min(self.ramp);
+        r + (self.speed - 1.0) * r * r / (2.0 * self.ramp) + self.speed * (t - r)
+    }
+}
+
+/// The current track's frames `from..until` played at `curve`'s speeds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Warp {
+    pub(super) from: u64,
+    pub(super) until: u64,
+    pub(super) curve: Varispeed,
+}
+
+impl Warp {
+    fn song_frames(self, played: u64) -> f64 {
+        let warped = played.clamp(self.from, self.until) - self.from;
+        (played - warped) as f64 + self.curve.song_frames(warped as f64)
+    }
 }
 
 /// How long the limiter takes to let go of a full reduction, in seconds;
@@ -63,7 +97,9 @@ impl Output {
         if self.rate == 0 {
             return self.base_secs;
         }
-        self.base_secs + self.frames_played as f64 / self.rate as f64
+        let played = self.frames_played;
+        let song = self.warp.map_or(played as f64, |w| w.song_frames(played));
+        self.base_secs + song / self.rate as f64
     }
 
     pub(super) fn reset(&mut self, base_secs: f64) {
@@ -71,6 +107,7 @@ impl Output {
         self.base_secs = base_secs;
         self.frames_played = 0;
         self.switch_at = None;
+        self.warp = None;
         // What follows a seek or load fades in, from no limiting.
         self.gain = 0.0;
         self.limiting = 0.0;
@@ -81,6 +118,11 @@ impl Output {
     /// correction when they cross into it, which then counts from its start.
     fn played(&mut self, frames: u64) -> Option<f32> {
         self.frames_played += frames;
+        // Folded in once heard, as an undone switch leaves one behind.
+        if self.warp.is_some_and(|w| self.frames_played >= w.until) {
+            self.base_secs = self.position() - self.frames_played as f64 / self.rate as f64;
+            self.warp = None;
+        }
         let at = self.switch_at?;
         if self.frames_played < at {
             return None;
@@ -275,6 +317,57 @@ mod tests {
             data,
             [0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0],
             "fades in"
+        );
+    }
+
+    #[test]
+    fn keeps_song_time_through_a_varispeed_ramp_and_after() {
+        let mut out = output();
+        let curve = Varispeed {
+            ramp: 48_000.0,
+            speed: 1.04,
+        };
+        out.warp = Some(Warp {
+            from: 48_000,
+            until: 96_000,
+            curve,
+        });
+        out.played(48_000);
+        assert_eq!(out.position(), 31.0, "at speed before it");
+        out.played(24_000);
+        // Half way up the ramp, at 1.01 on average.
+        assert!((out.position() - (31.0 + 0.5 * 1.01)).abs() < 1e-9);
+        out.played(24_000);
+        assert!((out.position() - 32.02).abs() < 1e-9, "a second at 1.02");
+        assert_eq!(out.warp, None, "folded in once heard");
+        out.played(48_000);
+        assert!((out.position() - 33.02).abs() < 1e-9, "at speed after it");
+        // Held past the ramp, it runs at the speed reached.
+        assert!((curve.song_frames(96_000.0) - 48_000.0 * (1.02 + 1.04)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clears_the_varispeed_on_a_reset_or_the_switch() {
+        let mut out = output();
+        let warp = Warp {
+            from: 0,
+            until: 1_000,
+            curve: Varispeed {
+                ramp: 1_000.0,
+                speed: 0.95,
+            },
+        };
+        out.warp = Some(warp);
+        out.reset(5.0);
+        assert_eq!((out.warp, out.position()), (None, 5.0));
+        out.warp = Some(warp);
+        out.switch_at = Some(1_000);
+        assert_eq!(out.played(1_200), Some(0.5));
+        assert_eq!(out.warp, None);
+        assert_eq!(
+            out.position(),
+            200.0 / 48_000.0,
+            "the next track's own time"
         );
     }
 

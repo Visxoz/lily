@@ -7,7 +7,7 @@ mod matching;
 mod sites;
 mod youtube;
 
-use std::time::Duration;
+use std::{ops::Range, time::Duration};
 
 pub(super) use youtube::timed;
 
@@ -18,6 +18,8 @@ pub struct Lyrics {
     pub lines: Vec<String>,
     /// Each line's start in seconds when synced, else empty.
     pub starts: Vec<f64>,
+    /// Each line's end where every line has one, else empty.
+    pub ends: Vec<f64>,
     /// Each line's words when sung word by word, else empty; a line may still
     /// have none.
     pub words: Vec<Vec<Word>>,
@@ -54,7 +56,51 @@ impl Lyrics {
     pub fn is_word_synced(&self) -> bool {
         self.is_synced() && self.words.len() == self.lines.len()
     }
+
+    /// Sung spans, sorted and merged: word timing where present, else each
+    /// line to its end, or a guess of `LINE_SECS`, but never past the next;
+    /// `None` if untimed.
+    pub fn sung(&self) -> Option<Vec<Range<f64>>> {
+        if !self.is_synced() {
+            return None;
+        }
+        let ends = (self.ends.len() == self.lines.len()).then_some(&self.ends);
+        let mut spans = Vec::new();
+        for (i, (line, &start)) in self.lines.iter().zip(&self.starts).enumerate() {
+            match self.words.get(i).filter(|w| !w.is_empty()) {
+                Some(words) => spans.extend(words.iter().map(|w| w.start..w.end)),
+                // A blank or "♪" line is a break, which still ends the one before.
+                None if line.chars().any(char::is_alphanumeric) => {
+                    let next = self.starts.get(i + 1).copied().unwrap_or(f64::INFINITY);
+                    // An end may run on to the next line, which starts its own span.
+                    let end = ends
+                        .map(|ends| ends[i])
+                        .filter(|&end| end > start)
+                        .unwrap_or(start + LINE_SECS)
+                        .min(next);
+                    spans.push(start..end);
+                }
+                None => {}
+            }
+        }
+        spans.retain(|s| s.start.is_finite() && s.end.is_finite() && s.start < s.end);
+        spans.sort_unstable_by(|a, b| a.start.total_cmp(&b.start));
+        spans.dedup_by(|later, kept| {
+            let joins = later.start - kept.end < SUNG_GAP_SECS;
+            if joins {
+                kept.end = kept.end.max(later.end);
+            }
+            joins
+        });
+        (!spans.is_empty()).then_some(spans)
+    }
 }
+
+/// How long a line without an end counts as sung, as one before a break runs
+/// on to it.
+const LINE_SECS: f64 = 5.0;
+/// Sung spans closer than this are one, as a breath isn't a gap.
+const SUNG_GAP_SECS: f64 = 0.6;
 
 /// `own`'s lyrics (YouTube's), or another site's that agree with them. Only
 /// YouTube's failure fails, so the song is asked again rather than shown
@@ -172,6 +218,83 @@ mod tests {
             source: source.into(),
             ..Lyrics::default()
         }
+    }
+
+    fn timed_lines(lines: &[&str], starts: &[f64], words: Vec<Vec<Word>>) -> Lyrics {
+        Lyrics {
+            lines: lines.iter().map(|&l| l.into()).collect(),
+            starts: starts.to_vec(),
+            words,
+            ..Lyrics::default()
+        }
+    }
+
+    fn words(spans: &[(f64, f64)]) -> Vec<Word> {
+        spans
+            .iter()
+            .map(|&(start, end)| Word {
+                text: "la ".into(),
+                start,
+                end,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sung_by_words_joins_those_a_breath_apart() {
+        let lyrics = timed_lines(
+            &["One", "Two", "Three"],
+            &[1.0, 5.0, 20.0],
+            vec![
+                words(&[(1.0, 1.5), (1.9, 2.4), (3.1, 3.5)]),
+                // Out of order, overlapping, and one ending before it starts.
+                words(&[(6.0, 7.0), (5.0, 6.5), (9.0, 8.0)]),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(
+            lyrics.sung(),
+            Some(vec![1.0..2.4, 3.1..3.5, 5.0..7.0, 20.0..25.0]),
+            "a line without words is sung as a line"
+        );
+    }
+
+    #[test]
+    fn sung_by_lines_runs_to_the_next_at_most_a_while() {
+        let lyrics = timed_lines(
+            &["One", "♪", "Two", "Three"],
+            &[0.0, 10.0, 12.0, 13.0],
+            Vec::new(),
+        );
+        assert_eq!(lyrics.sung(), Some(vec![0.0..5.0, 12.0..18.0]));
+    }
+
+    #[test]
+    fn sung_by_lines_ends_where_they_end() {
+        let lyrics = Lyrics {
+            // Shorter than the guess, longer, past the next line, and not
+            // after its start.
+            ends: vec![3.0, 11.0, 20.0, 40.0, 31.0, 34.0],
+            ..timed_lines(
+                &["One", "♪", "Two", "Three", "♪", "Four"],
+                &[0.0, 10.0, 12.0, 22.0, 30.0, 35.0],
+                Vec::new(),
+            )
+        };
+        assert_eq!(
+            lyrics.sung(),
+            Some(vec![0.0..3.0, 12.0..20.0, 22.0..30.0, 35.0..40.0])
+        );
+    }
+
+    #[test]
+    fn sung_is_unknown_without_timing() {
+        assert_eq!(Lyrics::plain("One\nTwo", String::new()).sung(), None);
+        assert_eq!(Lyrics::default().sung(), None);
+        assert_eq!(
+            timed_lines(&["", "♪"], &[0.0, 4.0], Vec::new()).sung(),
+            None
+        );
     }
 
     #[test]

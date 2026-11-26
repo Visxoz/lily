@@ -201,6 +201,7 @@ impl App {
                 queue_generation: 0,
                 playback: Playback::default(),
                 lyrics: Default::default(),
+                sung_spans: HashMap::new(),
                 suggest_generation: 0,
                 page_cache: HashMap::new(),
                 song_versions: HashMap::new(),

@@ -4,6 +4,7 @@
 mod automix;
 mod device;
 mod gapless;
+mod varispeed;
 
 pub(super) use automix::TAIL_SECS as AUTOMIX_TAIL_SECS;
 
@@ -127,8 +128,8 @@ impl Engine {
             self.reopen_lost_device();
             match command {
                 Some(Command::Load(opening, download)) => self.load(opening, download),
-                Some(Command::Queue(opening, download, transition)) => {
-                    self.queue(opening, download, transition)
+                Some(Command::Queue(opening, download, transition, sung)) => {
+                    self.queue(opening, download, transition, sung)
                 }
                 Some(Command::ClearNext) => self.drop_next(),
                 Some(Command::Seek(secs)) => self.seek(secs),

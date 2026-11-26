@@ -12,6 +12,7 @@ mod source;
 mod stereo;
 
 use std::{
+    ops::Range,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -76,6 +77,14 @@ pub struct Opening {
     pub start_at: f64,
 }
 
+/// Where the two songs of a blend are sung, in song seconds, from their timed
+/// lyrics; `None` where unknown. Only Automix reads it.
+#[derive(Debug, Default)]
+pub struct Sung {
+    pub current: Option<Vec<Range<f64>>>,
+    pub next: Option<Vec<Range<f64>>>,
+}
+
 /// The output devices plugged in, as cpal ID and name. Slow, and cpal sets up
 /// COM on the calling thread, so best called on one of its own.
 pub fn output_devices() -> Vec<(String, String)> {
@@ -124,7 +133,7 @@ pub enum PlayerEvent {
 
 enum Command {
     Load(Opening, Arc<Download>),
-    Queue(Opening, Arc<Download>, Transition),
+    Queue(Opening, Arc<Download>, Transition, Sung),
     ClearNext,
     Seek(f64),
     Stop,
@@ -303,11 +312,13 @@ impl Player {
 
     /// Queues the track to follow the current one by `transition`, replacing
     /// any queued before. Its download starts now.
-    pub fn queue_next(&self, spec: StreamSpec, transition: Transition) {
+    pub fn queue_next(&self, spec: StreamSpec, transition: Transition, sung: Sung) {
         self.shared.cancel_next();
         let (download, opening) = self.start(spec);
         *self.shared.next_download.lock().unwrap() = Some(Arc::clone(&download));
-        let _ = self.tx.send(Command::Queue(opening, download, transition));
+        let _ = self
+            .tx
+            .send(Command::Queue(opening, download, transition, sung));
     }
 
     /// Starts the spec's download, or takes the current one should it hold
@@ -441,7 +452,7 @@ mod tests {
     #[test]
     fn plays_a_file_from_disk() {
         let path = std::env::temp_dir().join(format!("lily-play-{}.wav", std::process::id()));
-        crate::local::tests::write_wav(&path, &[0.0; 8_000]);
+        crate::local::tests::write_wav(&path, &[0.0; 8_000], 8_000, 1);
         let download = Download::open(path.clone());
         let mut decoder = Decoder::open(download.reader(), "").unwrap();
         let mut samples = Vec::new();

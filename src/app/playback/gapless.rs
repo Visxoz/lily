@@ -1,11 +1,18 @@
 use std::{rc::Rc, time::Instant};
 
 use crate::app::{App, State, playback::sleep::Sleep};
-use crate::{api::Track, audio::Transition, settings::Settings};
+use crate::{
+    api::{self, Track},
+    audio::{Sung, Transition},
+    settings::Settings,
+};
 
 /// Time for the next stream to start downloading and its decoder to open. A
 /// crossfade or Automix adds what the player holds back for it.
 const GAPLESS_LEAD_SECS: f64 = 15.0;
+
+/// Songs whose sung spans are kept; past it only the current and next stay.
+const SUNG_LIMIT: usize = 8;
 
 /// Whether `next` follows `current` on its album, which is often written to
 /// run straight on, so it is never faded into.
@@ -28,11 +35,82 @@ fn next_transition(state: &State) -> Transition {
     }
 }
 
+/// Where the current and next songs are sung, for Automix alone, by the
+/// panel's lyrics first, as they may have come since.
+fn sung_for(state: &State, transition: Transition, next_id: &str) -> Sung {
+    if transition != Transition::Automix {
+        return Sung::default();
+    }
+    let spans = |id: &str| {
+        let kept = || state.sung_spans.get(id).cloned().flatten();
+        state.lyrics.sung(id).flatten().or_else(kept)
+    };
+    Sung {
+        current: state.queue.current().and_then(|t| spans(&t.id)),
+        next: spans(next_id),
+    }
+}
+
 impl App {
-    pub(in crate::app) fn change_transition(&self, change: impl FnOnce(&mut Settings)) {
+    /// Looks up where the current and next songs are sung while the next
+    /// would come in by Automix, which keeps their voices apart.
+    pub(in crate::app) fn prefetch_sung(self: &Rc<Self>) {
+        let ids = {
+            let mut guard = self.state.borrow_mut();
+            let state = &mut *guard;
+            if next_transition(state) != Transition::Automix {
+                return;
+            }
+            let playing = [state.queue.current(), state.queue.peek_next()];
+            if state.sung_spans.len() >= SUNG_LIMIT {
+                let kept = |id: &String| playing.iter().flatten().any(|t| t.id == *id);
+                state.sung_spans.retain(|id, _| kept(id));
+            }
+            let mut ids = Vec::new();
+            for track in playing.into_iter().flatten() {
+                // A music video is left for its song version, and a local
+                // file's name never leaves. One the panel is fetching is taken
+                // from it as it lands, or asked at the next track start should
+                // leaving the song abort it.
+                if track.video
+                    || !api::is_video_id(&track.id)
+                    || state.sung_spans.contains_key(&track.id)
+                    || state.lyrics.is_fetching(&track.id)
+                {
+                    continue;
+                }
+                // The panel's lyrics are copied, outliving its cache.
+                let kept = state.lyrics.sung(&track.id);
+                if kept.is_none() {
+                    ids.push(track.id.clone());
+                }
+                state.sung_spans.insert(track.id.clone(), kept.flatten());
+            }
+            ids
+        };
+        for id in ids {
+            let api = self.api.clone();
+            let work = {
+                let id = id.clone();
+                async move { api.sung(&id).await }
+            };
+            // Keyed by song, so a late answer only changes the map. A failure
+            // stays unknown, so queue edits offline don't ask again.
+            self.spawn(work, move |app, result| {
+                let spans = result.unwrap_or_else(|e| {
+                    log::debug!("{id}: could not find where it is sung: {e}");
+                    None
+                });
+                app.state.borrow_mut().sung_spans.insert(id, spans);
+            });
+        }
+    }
+
+    pub(in crate::app) fn change_transition(self: &Rc<Self>, change: impl FnOnce(&mut Settings)) {
         self.update_settings(change);
         // A track queued with the old setting is queued again.
         self.unqueue_next();
+        self.prefetch_sung();
     }
 
     /// Drops the track queued in the player, keeping its stream as prefetched.
@@ -97,9 +175,16 @@ impl App {
             };
             match result {
                 Ok(stream) if still_next => {
-                    let transition = next_transition(&app.state.borrow());
-                    app.player
-                        .queue_next(app.stream_spec(&next_id, stream.clone(), 0.0), transition);
+                    let (transition, sung) = {
+                        let state = app.state.borrow();
+                        let transition = next_transition(&state);
+                        (transition, sung_for(&state, transition, &next_id))
+                    };
+                    app.player.queue_next(
+                        app.stream_spec(&next_id, stream.clone(), 0.0),
+                        transition,
+                        sung,
+                    );
                     let playback = &mut app.state.borrow_mut().playback;
                     playback.queued = Some((next_id, stream, resolved_at));
                     playback.queued_failed = false;
