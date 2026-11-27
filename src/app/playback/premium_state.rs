@@ -79,11 +79,13 @@ impl PremiumShared {
         self.status.load(Ordering::Relaxed)
     }
 
-    /// Signing in or out says nothing yet about Premium.
+    /// Signing in or out says nothing yet about Premium, and leaves none of
+    /// the last session's play tracking.
     pub(in crate::app) fn reset(&self) {
         self.status.store(PREMIUM_UNKNOWN, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
         *self.recheck_at.lock().unwrap() = None;
+        crate::api::forget_tracking();
     }
 
     /// Whether to go straight to the free stream.
@@ -177,14 +179,18 @@ pub(super) async fn premium_player(
     let mut slot = shared.player.lock().await;
     if let Some(player) = slot.as_ref() {
         if shared.take_player_check(Instant::now()) {
-            let (shared, held) = (Arc::clone(shared), Arc::clone(player));
-            tokio::spawn(async move {
-                if let Err(e) = recheck_player(&shared, &held).await {
-                    premium::diag(format!("could not check the player: {e}"));
-                }
-            });
+            check_behind(shared, player, false);
         }
         return Ok(Arc::clone(player));
+    }
+    // At launch the saved player plays while YouTube's version is checked;
+    // a stale one costs the songs it solves meanwhile Premium, as they retry free.
+    if let Some(saved) = premium::saved_player() {
+        let saved = Arc::new(saved);
+        *shared.player_checked.lock().unwrap() = Instant::now();
+        check_behind(shared, &saved, true);
+        *slot = Some(Arc::clone(&saved));
+        return Ok(saved);
     }
     if shared
         .load_failed
@@ -206,6 +212,21 @@ pub(super) async fn premium_player(
             Err(e)
         }
     }
+}
+
+/// Checks `held` against YouTube's current player behind the song. With
+/// `saved`, never checked yet, a failed check is due again after the
+/// back-off rather than in an hour.
+fn check_behind(shared: &Arc<PremiumShared>, held: &Arc<premium::Player>, saved: bool) {
+    let (shared, held) = (Arc::clone(shared), Arc::clone(held));
+    tokio::spawn(async move {
+        if let Err(e) = recheck_player(&shared, &held).await {
+            if saved {
+                shared.suspect_player();
+            }
+            premium::diag(format!("could not check the player: {e}"));
+        }
+    });
 }
 
 /// Swaps in YouTube's current player should it have moved on from `held`.

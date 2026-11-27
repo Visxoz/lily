@@ -11,7 +11,7 @@ index 542a882..224a195 100644
  
  [dependencies.tracing]
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index 06386bc..f3ac2a6 100644
+index 06386bc..bc91dd8 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
 @@ -32,7 +32,8 @@ mod channel_rss;
@@ -340,7 +340,7 @@ index 06386bc..f3ac2a6 100644
          let mut cache_clients = HashMap::new();
          for (c, lk) in &self.inner.cache.clients {
              let v = lk.read().await.clone();
-@@ -1663,6 +1839,65 @@ impl RustyPipe {
+@@ -1663,6 +1839,74 @@ impl RustyPipe {
          Ok(())
      }
  
@@ -348,6 +348,15 @@ index 06386bc..f3ac2a6 100644
 +    pub fn user_auth_cookie_header(&self) -> Option<String> {
 +        let cookie = self.inner.cache.auth_cookie.read().unwrap();
 +        cookie.as_ref().map(|c| c.cookie.clone())
++    }
++
++    /// Whether the stored cookie signs in as its login's primary identity:
++    /// session index 0 or none, and no brand channel's page ID.
++    pub fn user_auth_is_primary(&self) -> bool {
++        let cookie = self.inner.cache.auth_cookie.read().unwrap();
++        cookie.as_ref().is_some_and(|c| {
++            c.channel_syncid.is_none() && c.session_index.as_deref().is_none_or(|i| i == "0")
++        })
 +    }
 +
 +    /// Take in the `Set-Cookie` values of a response to a request that sent the
@@ -406,7 +415,7 @@ index 06386bc..f3ac2a6 100644
      /// Attempt to fetch the YouTube website with login cookies to check if the user is successfully logged in
      /// and the session is still valid.
      pub async fn user_auth_check_cookie(&self) -> Result<(), Error> {
-@@ -1741,7 +1976,7 @@ impl RustyPipeQuery {
+@@ -1741,7 +1985,7 @@ impl RustyPipeQuery {
      /// This will change trends and recommended content.
      #[must_use]
      pub fn country(mut self, country: Country) -> Self {
@@ -415,7 +424,7 @@ index 06386bc..f3ac2a6 100644
          self
      }
  
-@@ -1913,7 +2148,7 @@ impl RustyPipeQuery {
+@@ -1913,7 +2157,7 @@ impl RustyPipeQuery {
          let (hl, gl) = if localized {
              (self.opts.lang, self.opts.country)
          } else {
@@ -424,7 +433,7 @@ index 06386bc..f3ac2a6 100644
          };
          let utc_offset_minutes = self.opts.utc_offset_minutes;
          let time_zone = self.opts.timezone.as_deref().unwrap_or("UTC");
-@@ -2315,6 +2550,18 @@ impl RustyPipeQuery {
+@@ -2315,6 +2559,18 @@ impl RustyPipeQuery {
          )
      }
  
@@ -443,7 +452,7 @@ index 06386bc..f3ac2a6 100644
      /// Execute a request to the YouTube API, then deobfuscate and map the response.
      ///
      /// Runs a single attempt, returns Ok with a erroneous RequestResult in case of a
-@@ -2337,7 +2584,7 @@ impl RustyPipeQuery {
+@@ -2337,7 +2593,7 @@ impl RustyPipeQuery {
              .map(Cow::Borrowed)
          {
              Some(vd) => vd,
@@ -452,7 +461,7 @@ index 06386bc..f3ac2a6 100644
          };
  
          let context = self
-@@ -2345,7 +2592,7 @@ impl RustyPipeQuery {
+@@ -2345,7 +2601,7 @@ impl RustyPipeQuery {
              .await;
          let req_body = QBody { context, body };
  
@@ -461,7 +470,7 @@ index 06386bc..f3ac2a6 100644
              id,
              lang: self.opts.lang,
              utc_offset: UtcOffset::from_whole_seconds(i32::from(self.opts.utc_offset_minutes) * 60)
-@@ -2370,10 +2617,15 @@ impl RustyPipeQuery {
+@@ -2370,10 +2626,15 @@ impl RustyPipeQuery {
              .http
              .execute(request.try_clone().unwrap())
              .await?;
@@ -477,7 +486,7 @@ index 06386bc..f3ac2a6 100644
  
          let res = if status.is_client_error() || status.is_server_error() {
              let error_msg = serde_json::from_str::<response::ErrorResponse>(&body)
-@@ -2427,15 +2679,23 @@ impl RustyPipeQuery {
+@@ -2427,15 +2688,23 @@ impl RustyPipeQuery {
          ctx_src: &MapRespOptions<'_>,
      ) -> Result<RequestResult<M>, Error> {
          let mut last_resp = None;
@@ -502,7 +511,7 @@ index 06386bc..f3ac2a6 100644
                          return Ok(resp);
                      }
                      e
-@@ -2614,19 +2874,39 @@ impl RustyPipeQuery {
+@@ -2614,19 +2883,39 @@ impl RustyPipeQuery {
      ) -> Result<String, Error> {
          let visitor_data = match self.opts.visitor_data.as_deref().map(Cow::Borrowed) {
              Some(vd) => vd,
@@ -550,7 +559,7 @@ index 06386bc..f3ac2a6 100644
      }
  }
  
-@@ -2764,6 +3044,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
+@@ -2764,6 +3053,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
  mod tests {
      use super::*;
  

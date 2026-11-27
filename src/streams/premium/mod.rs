@@ -16,7 +16,7 @@ use sha1::{Digest, Sha1};
 
 use crate::streams::{self, ResolvedStream};
 
-pub use player::{Player, current_version, load_current, load_player};
+pub use player::{Player, current_version, load_current, load_player, saved_player};
 
 pub(crate) const WEB_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
     (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
@@ -94,13 +94,16 @@ fn cookie_value<'c>(cookie: &'c str, name: &str) -> Option<&'c str> {
     })
 }
 
+/// The session cookie that names the login, as rustypipe reads it.
+pub(crate) fn sapisid(cookie: &str) -> Option<&str> {
+    cookie_value(cookie, "SAPISID").or_else(|| cookie_value(cookie, "__Secure-3PAPISID"))
+}
+
 /// The `Authorization` header YouTube's web player sends: SHA-1 hashes of
 /// the session cookies, the time and the origin.
 fn authorization(cookie: &str, origin: &str, now: u64) -> Option<String> {
-    let sapisid =
-        cookie_value(cookie, "SAPISID").or_else(|| cookie_value(cookie, "__Secure-3PAPISID"));
     let schemes = [
-        ("SAPISIDHASH", sapisid),
+        ("SAPISIDHASH", sapisid(cookie)),
         ("SAPISID1PHASH", cookie_value(cookie, "__Secure-1PAPISID")),
         ("SAPISID3PHASH", cookie_value(cookie, "__Secure-3PAPISID")),
     ];
@@ -121,6 +124,7 @@ async fn player_request(
     cookie: Option<&str>,
     visitor_data: &str,
     sts: u32,
+    keep_tracking: bool,
 ) -> Result<streams::PlayerResponse, String> {
     let origin = format!("https://{}", client.host);
     let body = json!({
@@ -159,7 +163,16 @@ async fn player_request(
     }
     let failed = format!("{} player request failed", client.name);
     let text = crate::http::text(request.body(body.to_string()), &failed).await?;
-    streams::parse_response(&text)
+    let mut response = streams::parse_response(&text)?;
+    // The stats URLs carry the client's name, which the report sends as WEB_REMIX.
+    if keep_tracking
+        && client.name == "WEB_REMIX"
+        && let Some(cookie) = cookie
+    {
+        let tracking = response.playback_tracking.take();
+        crate::api::keep_tracking(video_id, cookie, &text, tracking);
+    }
+    Ok(response)
 }
 
 /// Rewrites a stream URL with its unscrambled `n` and signature.
@@ -234,6 +247,9 @@ fn choose(
 /// `cookie` is `None` only for dry runs. With `any_format`, a song without a
 /// Premium stream takes the web client's best within `max_kbps`, saving a
 /// second request for a known Premium account, or as the last resort.
+/// `keep_tracking` keeps the answer's tracking for the song's next play to
+/// report, so only a resolve for playing it, with that play to be reported
+/// and signed in as the primary identity this request asks as, sets it.
 pub async fn resolve(
     video_id: &str,
     cookie: Option<&str>,
@@ -241,19 +257,28 @@ pub async fn resolve(
     player: &Arc<Player>,
     any_format: bool,
     max_kbps: Option<u64>,
+    keep_tracking: bool,
 ) -> Result<Outcome, String> {
     let started = Instant::now();
     let mut last_error = String::from("no clients");
     for client in CLIENTS {
-        let response =
-            match player_request(client, video_id, cookie, visitor_data, player.sts).await {
-                Ok(response) => response,
-                Err(e) => {
-                    diag(format!("{video_id}: {} failed: {e}", client.name));
-                    last_error = e;
-                    continue;
-                }
-            };
+        let response = match player_request(
+            client,
+            video_id,
+            cookie,
+            visitor_data,
+            player.sts,
+            keep_tracking,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                diag(format!("{video_id}: {} failed: {e}", client.name));
+                last_error = e;
+                continue;
+            }
+        };
         let requested = started.elapsed();
         let itags: Vec<u32> = response.audio_formats().iter().map(|f| f.itag).collect();
         let Ok(chosen) = choose(

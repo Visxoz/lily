@@ -31,6 +31,7 @@ async fn solved_stream(
         &player,
         any_format,
         max_kbps,
+        false,
     )
     .await?
     {
@@ -75,6 +76,8 @@ struct Resolver {
     /// Opening a song again after its connection dropped, whose failures
     /// say nothing about Premium.
     reopening: bool,
+    /// Its play goes to the account's history, as `record_play` decides.
+    reports_play: bool,
 }
 
 impl Resolver {
@@ -87,6 +90,7 @@ impl Resolver {
             video_id,
             want_premium,
             reopening,
+            reports_play,
             ..
         } = self;
         let video_id = video_id.as_str();
@@ -102,8 +106,19 @@ impl Resolver {
                     // A known Premium account plays a non-Premium song from this
                     // answer, saving the free clients; an unknown one counts a miss.
                     let known = premium.status() == PREMIUM_YES;
-                    match premium::resolve(video_id, Some(cookie), &visitor, &player, known, None)
-                        .await
+                    match premium::resolve(
+                        video_id,
+                        Some(cookie),
+                        &visitor,
+                        &player,
+                        known,
+                        None,
+                        // A reopened song's play was reported already, and a
+                        // brand channel's or another login's play must be
+                        // reported as it, not as this request asked.
+                        *reports_play && !reopening && api.signs_in_as_primary(),
+                    )
+                    .await
                     {
                         Ok(premium::Outcome::Stream(stream)) => {
                             if stream.premium {
@@ -140,8 +155,16 @@ impl Resolver {
                 let Ok(player) = premium_player(&premium).await else {
                     return;
                 };
-                match premium::resolve(&video_id, Some(&cookie), &visitor, &player, false, None)
-                    .await
+                match premium::resolve(
+                    &video_id,
+                    Some(&cookie),
+                    &visitor,
+                    &player,
+                    false,
+                    None,
+                    false,
+                )
+                .await
                 {
                     Ok(premium::Outcome::Stream(_)) => premium.record_premium(),
                     Ok(premium::Outcome::NoPremiumFormats) => premium.record_miss(),
@@ -155,7 +178,8 @@ impl Resolver {
             // Times the Premium path without an account; the result is
             // discarded as YouTube won't serve it anonymously.
             let dry = Instant::now();
-            let result = premium::resolve(video_id, None, &visitor, &player, false, None).await;
+            let result =
+                premium::resolve(video_id, None, &visitor, &player, false, None, false).await;
             premium::diag(format!(
                 "{video_id}: dry run {} in {} ms",
                 if result.is_ok() { "resolved" } else { "failed" },
@@ -263,6 +287,7 @@ impl App {
             api: self.api.clone(),
             premium: Arc::clone(&self.premium),
             reopening: state.playback.reopening(&video_id),
+            reports_play: state.signed_in && state.settings.youtube_history,
             video_id,
             want_premium,
             max_kbps: state.settings.quality.max_kbps(),

@@ -2,11 +2,12 @@
 //! account's history and recommendations.
 
 use std::{
-    hash::{BuildHasher, Hasher, RandomState},
-    time::Duration,
+    hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState},
+    sync::Mutex,
+    time::{Duration, Instant},
 };
 
-use rustypipe::client::ClientType;
+use rustypipe::client::{ClientType, answered_signed_out};
 use serde::Deserialize;
 use url::Url;
 
@@ -18,9 +19,10 @@ struct Player {
     playback_tracking: Option<Tracking>,
 }
 
+/// A player answer's `playbackTracking`, which the Premium path's parse reads too.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Tracking {
+pub struct Tracking {
     videostats_playback_url: Option<TrackingUrl>,
     videostats_watchtime_url: Option<TrackingUrl>,
     #[serde(default)]
@@ -36,6 +38,91 @@ struct TrackingUrl {
 
 fn tracking(json: &str) -> Option<Tracking> {
     serde_json::from_str::<Player>(json).ok()?.playback_tracking
+}
+
+/// Prefetched streams can resolve minutes before they play; tracking older
+/// than this is asked for again.
+const TRACKING_FRESH_FOR: Duration = Duration::from_secs(10 * 60);
+/// Songs prefetched and then skipped leave theirs behind.
+const TRACKING_LIMIT: usize = 32;
+
+/// The tracking of signed-in web player answers the Premium path had, so
+/// `report_play` needn't ask again. Each is taken once, so a replay asks.
+static KEPT: Mutex<Kept> = Mutex::new(Kept(Vec::new()));
+
+struct Entry {
+    video_id: String,
+    login: u64,
+    at: Instant,
+    tracking: Tracking,
+}
+
+/// Oldest first.
+struct Kept(Vec<Entry>);
+
+impl Kept {
+    fn keep(&mut self, entry: Entry) {
+        self.0.retain(|e| {
+            e.video_id != entry.video_id
+                && entry.at.saturating_duration_since(e.at) < TRACKING_FRESH_FOR
+        });
+        if self.0.len() >= TRACKING_LIMIT {
+            self.0.remove(0);
+        }
+        self.0.push(entry);
+    }
+
+    /// `video_id`'s tracking, while fresh and for the login `cookie` is.
+    fn take(&mut self, video_id: &str, cookie: &str, now: Instant) -> Option<Tracking> {
+        let entry = self
+            .0
+            .remove(self.0.iter().position(|e| e.video_id == video_id)?);
+        (Some(entry.login) == login(cookie)
+            && now.saturating_duration_since(entry.at) < TRACKING_FRESH_FOR)
+            .then_some(entry.tracking)
+    }
+}
+
+/// Tells apart the logins cookies are for, without keeping the session's
+/// secret.
+fn login(cookie: &str) -> Option<u64> {
+    crate::streams::premium::sapisid(cookie)
+        .map(|id| BuildHasherDefault::<DefaultHasher>::default().hash_one(id))
+}
+
+/// What a play's report can reuse of `json`, a web player answer asked with
+/// `cookie`, whose `tracking` its parse read. Not an answer YouTube gave
+/// signed out, as nothing watches that request's session.
+fn entry(
+    video_id: &str,
+    cookie: &str,
+    json: &str,
+    tracking: Option<Tracking>,
+    at: Instant,
+) -> Option<Entry> {
+    let tracking = tracking.filter(|t| t.videostats_playback_url.is_some())?;
+    if answered_signed_out(json) {
+        return None;
+    }
+    Some(Entry {
+        video_id: video_id.to_owned(),
+        login: login(cookie)?,
+        at,
+        tracking,
+    })
+}
+
+/// Keeps the tracking of the Premium path's answer for `video_id`, so the
+/// song's play is reported without asking for it again.
+pub fn keep_tracking(video_id: &str, cookie: &str, json: &str, tracking: Option<Tracking>) {
+    if let Some(entry) = entry(video_id, cookie, json, tracking, Instant::now()) {
+        KEPT.lock().unwrap().keep(entry);
+    }
+}
+
+/// Signing in or out leaves nothing of the last session's to reuse.
+pub fn forget_tracking() {
+    KEPT.lock().unwrap().0.clear();
 }
 
 /// A client playback nonce: 16 random characters the web player sends
@@ -145,20 +232,27 @@ impl Api {
     /// Adds `video_id` to the signed-in account's history, as YouTube
     /// Music's web player does: the account's player response for the song
     /// carries a stats URL, which is then requested with the session's
-    /// cookie. Returns where the play's watch time goes, should it say.
+    /// cookie. Returns where the play's watch time goes, should it say. A
+    /// play the Premium path just resolved for this login reuses its answer's.
     pub async fn report_play(&self, video_id: &str) -> Result<Option<Watchtime>> {
         let cookie = self.cookie().ok_or("signed out")?;
-        let json = self
-            .q()
-            .authenticated()
-            .raw(
-                ClientType::DesktopMusic,
-                "player",
-                &serde_json::json!({ "videoId": super::video_id(video_id)? }),
-            )
-            .await
-            .map_err(err)?;
-        let tracking = tracking(&json).ok_or("the player response has no playback tracking")?;
+        let kept = KEPT.lock().unwrap().take(video_id, &cookie, Instant::now());
+        let tracking = match kept {
+            Some(tracking) => tracking,
+            None => {
+                let json = self
+                    .q()
+                    .authenticated()
+                    .raw(
+                        ClientType::DesktopMusic,
+                        "player",
+                        &serde_json::json!({ "videoId": super::video_id(video_id)? }),
+                    )
+                    .await
+                    .map_err(err)?;
+                tracking(&json).ok_or("the player response has no playback tracking")?
+            }
+        };
         let playback = tracking
             .videostats_playback_url
             .ok_or("the player response has no playback stats URL")?;
@@ -218,6 +312,76 @@ mod tests {
         assert_eq!(tracking.videostats_default_flush_interval_seconds, Some(40));
         assert!(super::tracking(r#"{"playabilityStatus":{}}"#).is_none());
         assert!(super::tracking("not json").is_none());
+    }
+
+    const COOKIE: &str = "SID=a; SAPISID=one";
+    const PLAYER: &str = r#"{"streamingData":{"adaptiveFormats":[]},"playbackTracking":{
+        "videostatsPlaybackUrl":{"baseUrl":"https://s.youtube.com/api/stats/playback?ns=yt"}}}"#;
+
+    /// As the Premium path's parse hands it over.
+    fn answer(video_id: &str, cookie: &str, json: &str, at: Instant) -> Option<Entry> {
+        entry(video_id, cookie, json, tracking(json), at)
+    }
+
+    #[test]
+    fn reuses_the_premium_answers_tracking_once_for_the_same_login() {
+        let now = Instant::now();
+        let mut kept = Kept(Vec::new());
+        let keep = |kept: &mut Kept, id: &str| kept.keep(answer(id, COOKIE, PLAYER, now).unwrap());
+        keep(&mut kept, "a");
+        let rotated = "SID=b; SAPISID=one";
+        let taken = kept
+            .take("a", rotated, now + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            taken.videostats_playback_url.unwrap().base_url,
+            "https://s.youtube.com/api/stats/playback?ns=yt"
+        );
+        assert!(kept.take("a", COOKIE, now).is_none(), "a replay asks again");
+
+        keep(&mut kept, "b");
+        assert!(
+            kept.take("b", "SAPISID=two", now).is_none(),
+            "another login"
+        );
+        assert!(kept.take("b", COOKIE, now).is_none(), "and gone with it");
+        keep(&mut kept, "c");
+        assert!(kept.take("c", "SID=a", now).is_none(), "no login");
+        keep(&mut kept, "d");
+        assert!(
+            kept.take("d", COOKIE, now + TRACKING_FRESH_FOR).is_none(),
+            "stale"
+        );
+    }
+
+    #[test]
+    fn keeps_only_tracking_a_report_can_use() {
+        let now = Instant::now();
+        assert!(answer("a", "SID=a", PLAYER, now).is_none(), "no login");
+        let no_stats = r#"{"playbackTracking":{"videostatsWatchtimeUrl":{"baseUrl":"https://s.youtube.com/x"}}}"#;
+        assert!(answer("a", COOKIE, no_stats, now).is_none(), "no stats URL");
+        let signed_out = r#"{"responseContext":{"serviceTrackingParams":[{"params":[
+            {"key":"logged_in","value":"0"}]}]},
+            "playbackTracking":{"videostatsPlaybackUrl":{"baseUrl":"https://s.youtube.com/x"}}}"#;
+        assert!(
+            answer("a", COOKIE, signed_out, now).is_none(),
+            "answered signed out"
+        );
+    }
+
+    #[test]
+    fn keeps_only_so_many_tracking_answers() {
+        let now = Instant::now();
+        let mut kept = Kept(Vec::new());
+        for n in 0..=TRACKING_LIMIT {
+            let at = now + Duration::from_millis(n as u64);
+            kept.keep(answer(&n.to_string(), COOKIE, PLAYER, at).unwrap());
+        }
+        assert!(kept.take("0", COOKIE, now).is_none(), "the oldest goes");
+        assert!(
+            kept.take(&TRACKING_LIMIT.to_string(), COOKIE, now)
+                .is_some()
+        );
     }
 
     #[test]

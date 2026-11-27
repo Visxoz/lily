@@ -13,6 +13,8 @@ pub(crate) struct PlayerResponse {
     playability_status: PlayabilityStatus,
     streaming_data: Option<StreamingData>,
     player_config: Option<PlayerConfig>,
+    /// For the play's report to reuse, so the answer is parsed once.
+    pub playback_tracking: Option<crate::api::Tracking>,
 }
 
 #[derive(Deserialize)]

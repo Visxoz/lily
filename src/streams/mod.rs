@@ -6,7 +6,10 @@ mod head;
 pub mod premium;
 mod response;
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -100,15 +103,37 @@ fn mark(cut: &mut Vec<usize>, i: usize) -> bool {
     new
 }
 
-/// The clients not cut off, then those that are, as one may still resolve a
-/// song the others refuse; a download walking on from refusal to refusal
-/// reaches each before coming back to any.
-fn clients(cut: &[usize]) -> Vec<&'static Client> {
-    (0..CLIENTS.len())
-        .filter(|i| !cut.contains(i))
-        .chain(cut.iter().copied())
-        .map(|i| &CLIENTS[i])
-        .collect()
+/// When each client's player request last failed for a song a later client
+/// then played: it is asked after the rest for `DEMOTED_FOR`, rather than
+/// costing every song a round trip.
+static FAILED: Mutex<[Option<Instant>; CLIENT_COUNT]> = Mutex::new([None; CLIENT_COUNT]);
+const DEMOTED_FOR: Duration = Duration::from_secs(10 * 60);
+
+/// After a pass that `played` with one client, those before it whose
+/// request failed (`failing` holds each client asked, and whether its
+/// request rather than its answer failed) are demoted and it is not. An
+/// answer refusing the song, as age-gated or not on that client, may be the
+/// song's alone. A pass where all fail says nothing of any one.
+fn demote(failed: &mut [Option<Instant>], failing: &[(usize, bool)], played: usize, now: Instant) {
+    for &(i, request_failed) in failing {
+        if request_failed {
+            failed[i] = Some(now);
+        }
+    }
+    failed[played] = None;
+}
+
+/// Indices of the clients not cut off, then those that are, as one may
+/// still resolve a song the others refuse; a download walking on from
+/// refusal to refusal reaches each before coming back to any. Of those not
+/// cut off, ones `failed` lately go after the rest, failed longest ago first.
+fn clients(cut: &[usize], failed: &[Option<Instant>], now: Instant) -> Vec<usize> {
+    let demoted =
+        |&i: &usize| failed[i].filter(|&at| now.saturating_duration_since(at) < DEMOTED_FOR);
+    let mut open: Vec<usize> = (0..CLIENTS.len()).filter(|i| !cut.contains(i)).collect();
+    // Stable, and `None` first, so the rest keep their order.
+    open.sort_by_key(demoted);
+    open.into_iter().chain(cut.iter().copied()).collect()
 }
 
 /// Saved with a download without what only streaming needs, so it plays
@@ -152,17 +177,30 @@ pub async fn resolve(
     itag: Option<u32>,
 ) -> Result<ResolvedStream, String> {
     let mut first_error = None;
-    let clients = clients(&CUT_OFF.lock().unwrap());
-    for client in clients {
-        match resolve_with(client, video_id, visitor_data, max_kbps, itag).await {
+    let mut failing = Vec::new();
+    let order = clients(
+        &CUT_OFF.lock().unwrap(),
+        &*FAILED.lock().unwrap(),
+        Instant::now(),
+    );
+    for i in order {
+        let client = &CLIENTS[i];
+        let result = resolve_with(client, video_id, visitor_data, max_kbps, itag).await;
+        let request_failed = result.is_err();
+        match result.and_then(std::convert::identity) {
             Ok(stream) => {
-                if first_error.is_some() {
+                if !failing.is_empty() {
                     log::info!("{video_id}: the {} client served the stream", client.name);
+                    // A client without one format isn't broken.
+                    if itag.is_none() {
+                        demote(&mut *FAILED.lock().unwrap(), &failing, i, Instant::now());
+                    }
                 }
                 return Ok(stream);
             }
             Err(e) => {
                 log::debug!("{video_id}: {} client: {e}", client.name);
+                failing.push((i, request_failed));
                 first_error.get_or_insert(e);
             }
         }
@@ -170,13 +208,14 @@ pub async fn resolve(
     Err(first_error.unwrap_or_else(|| "no clients".into()))
 }
 
+/// `Err` when the request failed, `Ok(Err)` when its answer had no stream.
 async fn resolve_with(
     client: &Client,
     video_id: &str,
     visitor_data: &str,
     max_kbps: Option<u64>,
     itag: Option<u32>,
-) -> Result<ResolvedStream, String> {
+) -> Result<Result<ResolvedStream, String>, String> {
     let mut context = json!({
         "clientName": client.name,
         "clientVersion": client.version,
@@ -205,11 +244,12 @@ async fn resolve_with(
     )
     .body(body.to_string());
     let text = crate::http::text(request, "player request failed").await?;
-    let stream = parse(&text, client.user_agent, max_kbps, itag)?;
-    Ok(ResolvedStream {
-        client: Some(client.name),
-        ..stream
-    })
+    Ok(
+        parse(&text, client.user_agent, max_kbps, itag).map(|stream| ResolvedStream {
+            client: Some(client.name),
+            ..stream
+        }),
+    )
 }
 
 /// A player request from `origin` as the client numbered and versioned by
@@ -237,7 +277,12 @@ mod tests {
 
     #[test]
     fn asks_cut_off_clients_last_refused_longest_ago_first() {
-        let names = |cut: &[usize]| clients(cut).iter().map(|c| c.name).collect::<Vec<_>>();
+        let names = |cut: &[usize]| {
+            clients(cut, &[None; CLIENT_COUNT], Instant::now())
+                .iter()
+                .map(|&i| CLIENTS[i].name)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(&[]), ["VISIONOS", "ANDROID_VR", "IOS"]);
         assert_eq!(names(&[1]), ["VISIONOS", "IOS", "ANDROID_VR"]);
 
@@ -250,6 +295,53 @@ mod tests {
         assert_eq!(names(&cut), ["IOS", "VISIONOS", "ANDROID_VR"]);
         assert!(!mark(&mut cut, 2), "already marked");
         assert_eq!(cut, [0, 1, 2], "but now refused last");
+    }
+
+    #[test]
+    fn asks_clients_that_failed_after_the_rest_for_a_while() {
+        // Times run forward, as an `Instant` before boot panics.
+        let t = Instant::now();
+        let minute = Duration::from_secs(60);
+        let names = |cut: &[usize], failed: [Option<Instant>; CLIENT_COUNT], now| {
+            clients(cut, &failed, now)
+                .iter()
+                .map(|&i| CLIENTS[i].name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&[], [Some(t), None, None], t),
+            ["ANDROID_VR", "IOS", "VISIONOS"]
+        );
+        assert_eq!(
+            names(&[], [Some(t), Some(t + minute), None], t + minute),
+            ["IOS", "VISIONOS", "ANDROID_VR"],
+            "failed longest ago first"
+        );
+        assert_eq!(
+            names(&[], [Some(t), None, None], t + DEMOTED_FOR),
+            ["VISIONOS", "ANDROID_VR", "IOS"],
+            "for a while only"
+        );
+        assert_eq!(
+            names(&[2], [Some(t), None, None], t),
+            ["ANDROID_VR", "VISIONOS", "IOS"],
+            "cut-off clients stay last"
+        );
+
+        let mut failed = [None, Some(t), None];
+        demote(&mut failed, &[(0, true)], 1, t + minute);
+        assert_eq!(
+            failed,
+            [Some(t + minute), None, None],
+            "the one that played is not demoted"
+        );
+        let mut failed = [None; CLIENT_COUNT];
+        demote(&mut failed, &[(0, false), (1, true)], 2, t);
+        assert_eq!(
+            failed,
+            [None, Some(t), None],
+            "an answer refusing the song demotes nothing"
+        );
     }
 
     /// Checks every plain-URL client and the Premium player trim against
@@ -269,7 +361,8 @@ mod tests {
             };
             let mut whole = 0;
             for client in CLIENTS {
-                match resolve_with(client, VIDEO, &visitor, None, None).await {
+                let resolved = resolve_with(client, VIDEO, &visitor, None, None).await;
+                match resolved.and_then(std::convert::identity) {
                     Ok(stream) => match probe(&stream).await {
                         Ok(()) => {
                             eprint!(

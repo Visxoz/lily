@@ -50,6 +50,12 @@ impl Api {
         self.rp.user_auth_cookie_header()
     }
 
+    /// Whether the stored sign-in asks as its login's primary identity, as
+    /// the Premium path's requests do (`X-Goog-AuthUser: 0`, no page ID).
+    pub fn signs_in_as_primary(&self) -> bool {
+        self.rp.user_auth_is_primary()
+    }
+
     /// Asks Google for fresh session cookies, as an open YouTube tab does:
     /// nothing else renews the app's own session.
     pub async fn rotate_cookies(&self) -> Result<()> {
@@ -172,6 +178,35 @@ mod tests {
         assert!(answered_signed_out(&context("0")));
         assert!(!answered_signed_out(&context("1")));
         assert!(!answered_signed_out("{}"));
+    }
+
+    #[test]
+    fn tells_the_primary_identity_from_others() {
+        let dir = std::env::temp_dir().join(format!("lily-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let primary = |cache: &str| {
+            crate::platform::secret::write(&dir.join("rustypipe_cache.bin"), cache).unwrap();
+            Api::in_dir(dir.clone(), None)
+                .unwrap()
+                .signs_in_as_primary()
+        };
+        let signed_in = |auth: &str| {
+            primary(&format!(
+                r#"{{"auth_cookie":{{"cookie":"SAPISID=a"{auth}}}}}"#
+            ))
+        };
+        assert!(signed_in(""));
+        assert!(signed_in(r#","session_index":"0""#));
+        assert!(
+            !signed_in(r#","session_index":"1""#),
+            "another login in the jar"
+        );
+        assert!(
+            !signed_in(r#","session_index":"0","channel_syncid":"x""#),
+            "a brand channel"
+        );
+        assert!(!primary("{}"), "signed out");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
