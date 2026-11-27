@@ -507,9 +507,11 @@ impl Api {
             q.music_artist_albums(id, None, Some(AlbumOrder::Recency)),
         );
         let mut artist = artist?;
-        // An alias redirects to the artist's own ID, which the discography
-        // must be asked by.
-        let discography = if artist.id == id {
+        // An alias's page redirects to the artist's own ID, but its discography
+        // is already the artist's, so it is asked again only should it fail or
+        // add nothing.
+        let adds = matches!(&discography, Ok(all) if all.len() > artist.albums.len());
+        let discography = if artist.id == id || adds {
             discography
         } else {
             q.music_artist_albums(&artist.id, None, Some(AlbumOrder::Recency))
