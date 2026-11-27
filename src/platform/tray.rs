@@ -21,7 +21,7 @@ use windows_sys::Win32::{
             LR_DEFAULTCOLOR, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW,
             RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SetForegroundWindow, TPM_NONOTIFY,
             TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CLOSE, WM_LBUTTONUP,
-            WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+            WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
         },
     },
 };
@@ -41,6 +41,8 @@ pub enum Action {
     Next,
     Previous,
     Quit,
+    /// A Windows setting changed, light or dark mode among them.
+    SettingChanged,
 }
 
 /// Read as the menu opens.
@@ -187,6 +189,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 }
                 return 0;
             }
+            // Broadcast to top-level windows, so this one hears it even hidden.
+            WM_SETTINGCHANGE => handler.defer(Action::SettingChanged),
             // 0 if registering failed, which would match `menu`'s WM_NULL.
             _ if msg == handler.taskbar_created && msg != 0 && handler.added.get() => {
                 handler.notify(hwnd, NIM_ADD);

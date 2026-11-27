@@ -67,6 +67,7 @@ impl App {
         ui.set_mono(settings.mono);
         ui.set_balance(settings.balance);
         ui.set_accent_choice(settings.accent.index());
+        ui.set_look_choice(settings.look.index());
     }
 
     /// Lists the music folders, and lets their files be read; run as they change.
@@ -87,7 +88,7 @@ impl App {
     /// as it makes Windows restyle the window; the accent alone goes through
     /// `apply_accent`.
     pub(super) fn apply_theme(&self, ui: &AppWindow) {
-        let look = self.state.borrow().settings.look;
+        let look = self.state.borrow().settings.look.shown();
         ui.global::<Theme>().set_look(look.index());
         self.apply_accent(ui);
         let light = look == Look::Light;
@@ -102,6 +103,16 @@ impl App {
         });
     }
 
+    /// Run as Windows' settings change, which they do in bursts and for many
+    /// reasons, so the window restyles only when System's look moved.
+    pub(super) fn follow_system_look(&self) {
+        let ui = self.ui();
+        let look = self.state.borrow().settings.look;
+        if look == Look::System && look.shown().index() != ui.global::<Theme>().get_look() {
+            self.apply_theme(&ui);
+        }
+    }
+
     /// Sets the accent alone, which leaves the title bar as it is.
     pub(super) fn apply_accent(&self, ui: &AppWindow) {
         let state = self.state.borrow();
@@ -112,8 +123,8 @@ impl App {
             .map(opaque)
             .or(state.artwork_accent)
             .unwrap_or_else(|| opaque(settings::LILY));
-        ui.global::<Theme>()
-            .set_accent(images::readable(accent, settings.look == Look::Light));
+        let theme = ui.global::<Theme>();
+        theme.set_accent(images::readable(accent, theme.get_light()));
         drop(state);
         self.theme_mini();
     }

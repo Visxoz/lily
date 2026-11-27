@@ -77,6 +77,8 @@ pub enum Look {
     Light,
     #[default]
     Black,
+    /// Light or Black as Windows' app mode is.
+    System,
 }
 
 impl Look {
@@ -88,7 +90,22 @@ impl Look {
         match i {
             1 => Look::Light,
             2 => Look::Black,
+            3 => Look::System,
             _ => Look::Dark,
+        }
+    }
+
+    /// The look drawn, never System.
+    pub fn shown(self) -> Look {
+        self.resolve(crate::platform::apps_light)
+    }
+
+    /// Asks `system_light` only for System, so other looks cost nothing.
+    fn resolve(self, system_light: impl FnOnce() -> bool) -> Look {
+        match self {
+            Look::System if system_light() => Look::Light,
+            Look::System => Look::Black,
+            look => look,
         }
     }
 }
@@ -501,7 +518,7 @@ mod tests {
         assert_eq!(Accent::from_index(-1), Accent::Lily);
         assert_eq!(Accent::from_index(99), Accent::Lily);
         assert_eq!(Accent::Artwork.rgb(), None);
-        for look in [Look::Dark, Look::Light, Look::Black] {
+        for look in [Look::Dark, Look::Light, Look::Black, Look::System] {
             assert_eq!(Look::from_index(look.index()), look);
         }
         let settings: Settings =
@@ -510,5 +527,29 @@ mod tests {
             (settings.look, settings.accent),
             (Look::Black, Accent::Artwork)
         );
+    }
+
+    #[test]
+    fn looks_load_as_before_and_system_round_trips() {
+        let look = |json: &str| Settings::parse(json.as_bytes()).look;
+        assert_eq!(look("{}"), Look::Black);
+        assert_eq!(look(r#"{"look":"dark"}"#), Look::Dark);
+        assert_eq!(look(r#"{"look":"light"}"#), Look::Light);
+        let system = Settings {
+            look: Look::System,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&system).unwrap();
+        assert!(json.contains(r#""look":"system""#));
+        assert_eq!(look(&json), Look::System);
+    }
+
+    #[test]
+    fn system_shows_light_or_black_and_others_never_ask() {
+        assert_eq!(Look::System.resolve(|| true), Look::Light);
+        assert_eq!(Look::System.resolve(|| false), Look::Black);
+        for look in [Look::Dark, Look::Light, Look::Black] {
+            assert_eq!(look.resolve(|| unreachable!()), look);
+        }
     }
 }

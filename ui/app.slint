@@ -167,6 +167,8 @@ export component AppWindow inherits Window {
     in property <string> premium-status;
     in property <[AccentChoice]> accents;
     in property <int> accent-choice;
+    /// The look picked, which may be System; `Theme.look` is the one drawn.
+    in property <int> look-choice;
     // Last.fm: whether this build has its keys, the connected account's
     // name or empty, and whether it waits for the user in the browser.
     in property <bool> lastfm-available;
@@ -646,6 +648,7 @@ export component AppWindow inherits Window {
             check-updates: root.check-updates;
             accents: root.accents;
             accent-choice: root.accent-choice;
+            look-choice: root.look-choice;
             close-to-tray: root.close-to-tray;
             set-close-to-tray(v) => { root.set-close-to-tray(v); }
             animated-art: root.animated-art;

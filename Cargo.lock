@@ -3205,6 +3205,7 @@ dependencies = [
  "url",
  "wgpu-types",
  "windows 0.62.2",
+ "windows-registry",
  "windows-sys 0.61.2",
  "winresource",
  "wry",

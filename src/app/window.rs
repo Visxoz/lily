@@ -79,6 +79,7 @@ impl App {
             Action::Next => self.skip(),
             Action::Previous => self.previous(),
             Action::Quit => self.quit(),
+            Action::SettingChanged => self.follow_system_look(),
         }
     }
 

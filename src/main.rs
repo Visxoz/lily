@@ -284,7 +284,7 @@ fn main() {
     // winit resets the title bar to the system theme on WM_SETTINGCHANGE unless
     // the window was created with one (`set_theme` doesn't count). Only the
     // main window, made first: the sign-in page is white in every look.
-    let title_bar = if settings.look == settings::Look::Light {
+    let title_bar = if settings.look.shown() == settings::Look::Light {
         slint::winit_030::winit::window::Theme::Light
     } else {
         slint::winit_030::winit::window::Theme::Dark
