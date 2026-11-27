@@ -4,6 +4,7 @@
 mod api;
 mod app;
 mod audio;
+mod audio_cache;
 mod downloads;
 mod google_sign_in;
 mod http;
@@ -281,6 +282,12 @@ fn main() {
     });
 
     let settings = settings::Settings::load();
+    audio_cache::set_budget(settings.audio_cache_budget());
+    runtime.spawn_blocking(|| {
+        let cache = audio_cache::AudioCache::default();
+        cache.sweep();
+        cache.prune();
+    });
     // winit resets the title bar to the system theme on WM_SETTINGCHANGE unless
     // the window was created with one (`set_theme` doesn't count). Only the
     // main window, made first: the sign-in page is white in every look.

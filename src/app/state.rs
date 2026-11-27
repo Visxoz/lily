@@ -47,6 +47,9 @@ pub(super) struct Playback {
     pub(super) playing: Option<(String, ResolvedStream, Instant)>,
     /// A track whose Premium stream failed and plays the free one instead.
     pub(super) force_free: Option<String>,
+    /// A track being retried after failing to play, whose next resolve
+    /// passes over any copy kept of it and streams it.
+    pub(super) uncached: Option<String>,
     /// Where a track is to start: restored from the last run, sought to
     /// while stopped, or where a Premium retry or dropped connection left
     /// off. Kept until it sounds, so a load that fails starts there again.

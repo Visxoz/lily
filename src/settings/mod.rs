@@ -15,8 +15,8 @@ pub use account::{
 };
 pub use blocked::Blocked;
 pub use files::{
-    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, write_atomic,
-    write_atomic_parts,
+    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, touch,
+    write_atomic, write_atomic_parts,
 };
 pub(crate) use files::{read_json, save_json};
 pub use history::History;
@@ -189,6 +189,11 @@ impl Accent {
 /// The crossfade lengths Settings offers, in seconds.
 pub const CROSSFADE_SECS: [f32; 9] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
 
+/// The audio cache's sizes Settings offers, in MB of a million bytes.
+pub const AUDIO_CACHE_MB: [u32; 7] = [20, 40, 100, 250, 500, 1000, 2000];
+/// About ten songs.
+pub const DEFAULT_AUDIO_CACHE_MB: u32 = 40;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -223,6 +228,9 @@ pub struct Settings {
     pub pause_on_unplug: bool,
     /// Playback speed, the pitch moving with it.
     pub speed: f32,
+    /// How much of the songs played lately is kept to play again offline.
+    #[serde(deserialize_with = "audio_cache_size")]
+    pub audio_cache_mb: u32,
     /// Closing the window leaves the app playing in the tray.
     pub close_to_tray: bool,
     pub check_updates: bool,
@@ -273,6 +281,16 @@ fn normalise_level<'de, D: serde::Deserializer<'de>>(
         Stored::Old(true) => crate::audio::Normalise::Normal,
         Stored::Old(false) => crate::audio::Normalise::Off,
         Stored::Level(level) => level,
+    })
+}
+
+/// A size Settings doesn't offer, as from a hand edit, is the default.
+fn audio_cache_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let mb = u32::deserialize(d)?;
+    Ok(if AUDIO_CACHE_MB.contains(&mb) {
+        mb
+    } else {
+        DEFAULT_AUDIO_CACHE_MB
     })
 }
 
@@ -335,6 +353,7 @@ impl Default for Settings {
             automix: false,
             pause_on_unplug: true,
             speed: 1.0,
+            audio_cache_mb: DEFAULT_AUDIO_CACHE_MB,
             close_to_tray: true,
             check_updates: true,
             equaliser: false,
@@ -402,6 +421,11 @@ impl Settings {
 
     pub fn set_quality(&mut self, quality: Quality) {
         self.quality = quality;
+    }
+
+    /// The audio cache's size in bytes.
+    pub fn audio_cache_budget(&self) -> u64 {
+        u64::from(self.audio_cache_mb) * 1_000_000
     }
 
     pub fn equaliser(&self) -> Option<crate::audio::eq::Gains> {
@@ -482,6 +506,17 @@ mod tests {
         );
         assert!(settings.pause_on_unplug);
         assert_eq!(settings.quality, Quality::High);
+        assert_eq!(settings.audio_cache_mb, DEFAULT_AUDIO_CACHE_MB);
+    }
+
+    #[test]
+    fn reads_only_an_audio_cache_size_settings_offers() {
+        let mb = |json: &str| Settings::parse(json.as_bytes()).audio_cache_mb;
+        assert_eq!(mb(r#"{"audio_cache_mb":250}"#), 250);
+        assert_eq!(mb(r#"{"audio_cache_mb":300}"#), DEFAULT_AUDIO_CACHE_MB);
+        assert_eq!(mb(r#"{"audio_cache_mb":"big"}"#), DEFAULT_AUDIO_CACHE_MB);
+        assert!(AUDIO_CACHE_MB.contains(&DEFAULT_AUDIO_CACHE_MB));
+        assert_eq!(Settings::default().audio_cache_budget(), 40_000_000);
     }
 
     #[test]

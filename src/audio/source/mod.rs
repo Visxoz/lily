@@ -1,7 +1,8 @@
 //! Downloads a stream into memory in the background and serves it to the
 //! demuxer as a seekable file, blocking reads until their bytes arrive. The
 //! download follows the reader, so a seek ahead is fetched next and the gaps
-//! after. A file on disk is served in place.
+//! after. A file on disk is served in place, and a stream to be kept is
+//! written out as it arrives.
 
 mod blocks;
 mod download;
@@ -10,13 +11,16 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     os::windows::fs::FileExt,
-    path::PathBuf,
-    sync::{Arc, Condvar, Mutex, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Arc, Condvar, Mutex, OnceLock, PoisonError},
     thread,
 };
 
 use blocks::State;
+use download::Part;
 use symphonia::core::io::MediaSource;
+
+use super::Keep;
 
 /// googlevideo throttles large single requests, so the file is fetched in
 /// ranges no bigger than this, each within one aligned block.
@@ -43,6 +47,38 @@ pub struct Source {
 /// refused too. Runs on the download thread, so may block.
 pub type Refresh = Box<dyn FnMut(bool) -> Result<Source, String> + Send>;
 
+/// Each file a live download plays from or is being kept as, once per
+/// download, as repeat-one opens one file for both the current and next.
+static IN_USE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Holds a path in `IN_USE` until dropped.
+struct InUse(PathBuf);
+
+impl InUse {
+    fn new(path: &Path) -> Self {
+        lock_in_use().push(path.to_owned());
+        Self(path.to_owned())
+    }
+}
+
+impl Drop for InUse {
+    fn drop(&mut self) {
+        let mut held = lock_in_use();
+        if let Some(i) = held.iter().position(|p| *p == self.0) {
+            held.swap_remove(i);
+        }
+    }
+}
+
+fn lock_in_use() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    IN_USE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether a download is playing `path` or writing it out, so it must stay.
+pub fn in_use(path: &Path) -> bool {
+    lock_in_use().iter().any(|p| p == path)
+}
+
 #[derive(Default)]
 pub struct Download {
     state: Mutex<State>,
@@ -51,6 +87,8 @@ pub struct Download {
     file: OnceLock<File>,
     /// The URL it started from, which a replay is matched on; empty for a file.
     url: String,
+    /// The file it reads or is kept as, held in use while it lives.
+    _in_use: Option<InUse>,
 }
 
 impl Download {
@@ -60,22 +98,29 @@ impl Download {
         download
     }
 
-    pub fn start(mut source: Source, refresh: Refresh) -> Arc<Self> {
+    /// With `keep`, the stream is written out as it arrives and kept once
+    /// whole, unless it is a window, which never is.
+    pub fn start(mut source: Source, refresh: Refresh, keep: Option<Keep>) -> Arc<Self> {
+        // Only here, as `fetch_all` must keep every byte.
+        let window = source.size > WINDOW_FROM;
+        let keep = keep.filter(|_| !window);
         let mut download = Self {
             url: source.url.clone(),
+            _in_use: keep.as_ref().map(|keep| InUse::new(&keep.path)),
             ..Self::sized(source.size)
         };
         let state = download.state.get_mut().unwrap();
-        // Only here, as `fetch_all` must keep every byte.
-        state.window = source.size > WINDOW_FROM;
+        state.window = window;
         // `run` carries on after the bytes held. Taken, as the source is kept
         // for refreshes all song long.
-        state.put(0, &std::mem::take(&mut source.head));
+        let head = std::mem::take(&mut source.head);
+        state.put(0, &head);
+        let part = keep.map(|keep| Part::new(keep, head));
         let download = Arc::new(download);
         let worker = Arc::clone(&download);
         thread::Builder::new()
             .name("stream-download".into())
-            .spawn(move || worker.run(source, refresh))
+            .spawn(move || worker.run(source, refresh, part))
             .expect("download thread spawns");
         download
     }
@@ -83,7 +128,10 @@ impl Download {
     /// Serves `path`; a file that won't open fails the first read. Opened on
     /// a thread, as a sleeping disk or share can take seconds to answer.
     pub fn open(path: PathBuf) -> Arc<Self> {
-        let download = Arc::new(Self::default());
+        let download = Arc::new(Self {
+            _in_use: Some(InUse::new(&path)),
+            ..Self::default()
+        });
         let worker = Arc::clone(&download);
         thread::Builder::new()
             .name("file-open".into())
@@ -110,7 +158,7 @@ impl Download {
     /// joining would hold the stream twice.
     pub fn fetch_all(source: Source, refresh: Refresh) -> Result<Vec<Vec<u8>>, String> {
         let download = Self::sized(source.size);
-        download.run(source, refresh);
+        download.run(source, refresh, None);
         let state = download.state.into_inner().unwrap();
         if let Some(e) = state.error {
             return Err(e);
@@ -260,6 +308,16 @@ mod tests {
         let mut reader = Download::open(path).reader();
         let e = reader.read(&mut [0; 4]).unwrap_err();
         assert!(e.to_string().contains("couldn't open"), "{e}");
+    }
+
+    #[test]
+    fn holds_a_file_in_use_while_any_download_has_it() {
+        let path = std::env::temp_dir().join("lily-in-use.audio");
+        let (current, next) = (InUse::new(&path), InUse::new(&path));
+        drop(current);
+        assert!(in_use(&path), "the next track still plays it");
+        drop(next);
+        assert!(!in_use(&path));
     }
 
     #[test]

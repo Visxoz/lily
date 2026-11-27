@@ -19,6 +19,7 @@ use slint::{SharedString, Timer};
 
 use super::{App, SongVersion, State};
 use crate::{
+    audio_cache::AudioCache,
     images,
     queue::Repeat,
     streams::{ResolvedStream, premium},
@@ -170,21 +171,37 @@ impl App {
 
     fn playback_failed(self: &Rc<Self>, title: &str, error: &str) {
         log::warn!("playback failed: {error}");
-        // A Premium stream that will not play gets one retry on the free one.
-        let retry_free = {
+        // A kept copy that will not play gets one retry from the network, and
+        // a Premium stream one on the free stream.
+        let retry = {
             let mut state = self.state.borrow_mut();
             let State {
                 queue, playback, ..
             } = &mut *state;
-            // One that would not play is never played again from memory.
-            playback.playing = None;
-            match queue.current().map(|t| t.id.clone()) {
+            let id = queue.current().map(|t| t.id.clone());
+            // One that would not play is never played again from memory. The
+            // playing stream may be the last song's, should this one not have
+            // resolved.
+            let kept = playback.playing.take().is_some_and(|(playing, stream, _)| {
+                Some(playing) == id && stream.file.is_some_and(|f| AudioCache::default().owns(&f))
+            });
+            // A retry that fails before it sounds still carries the play.
+            let recorded = playback.play_recorded == Some(playback.generation);
+            match id {
                 Some(id)
-                    if playback.current_premium && playback.force_free.as_ref() != Some(&id) =>
+                    if kept
+                        || playback.current_premium
+                            && playback.force_free.as_ref() != Some(&id) =>
                 {
-                    playback.current_premium = false;
-                    playback.force_free = Some(id.clone());
-                    playback.prefetched.clear();
+                    if !kept {
+                        playback.current_premium = false;
+                        playback.force_free = Some(id.clone());
+                        playback.prefetched.clear();
+                    }
+                    // The retry streams it, whether the copy kept failed or the
+                    // failing stream was kept whole; the next copy kept replaces
+                    // it, and one that wasn't at fault stays.
+                    playback.uncached = Some(id.clone());
                     // Mid-song, carry on from where the sound got to, read before
                     // `start_current` stops the player; at the very end, start over.
                     let position = self.player.position();
@@ -193,18 +210,22 @@ impl App {
                     if carry_on {
                         playback.resume = Some((id.clone(), position));
                     }
-                    Some((id, carry_on))
+                    Some((id, carry_on || recorded, kept))
                 }
                 _ => None,
             }
         };
-        if let Some((id, carry_on)) = retry_free {
-            self.premium.suspect_player();
-            premium::diag(format!(
-                "{id}: Premium stream failed to play ({error}); retrying the free stream"
-            ));
+        if let Some((id, carry_play, kept)) = retry {
+            if kept {
+                log::warn!("{id}: its kept copy failed to play ({error}); streaming it instead");
+            } else {
+                self.premium.suspect_player();
+                premium::diag(format!(
+                    "{id}: Premium stream failed to play ({error}); retrying the free stream"
+                ));
+            }
             self.start_current();
-            if carry_on {
+            if carry_play {
                 let playback = &mut self.state.borrow_mut().playback;
                 playback.play_recorded = Some(playback.generation);
             }

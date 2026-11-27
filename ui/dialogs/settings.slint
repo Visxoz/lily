@@ -227,6 +227,9 @@ export component SettingsDialog inherits Dialog {
     in property <string> output-detail;
     in property <[string]> speeds;
     in property <int> speed;
+    in property <[string]> audio-cache-sizes;
+    in property <int> audio-cache-size;
+    in property <string> audio-cache-detail;
     in property <bool> equaliser;
     in property <[string]> eq-presets;
     in property <int> eq-preset;
@@ -270,6 +273,8 @@ export component SettingsDialog inherits Dialog {
     callback set-output-device(index: int);
     callback list-output-devices();
     callback set-speed(index: int);
+    callback set-audio-cache(index: int);
+    callback clear-audio-cache();
     callback set-autoplay(value: bool);
     callback set-youtube-history(value: bool);
     callback set-rating-buttons(value: bool);
@@ -469,6 +474,25 @@ export component SettingsDialog inherits Dialog {
 
     if root.tab == 2: Tab {
         SettingRow {
+            label: "Audio cache";
+            detail: root.audio-cache-detail;
+            ChoiceButton {
+                text: root.audio-cache-sizes[root.audio-cache-size];
+                choices: root.audio-cache-sizes;
+                current: root.audio-cache-size;
+                menu-width: 120px;
+                picked(i) => { root.set-audio-cache(i); }
+            }
+
+            PillButton {
+                y: (parent.height - self.height) / 2;
+                text: "Clear";
+                small: true;
+                clicked => { root.clear-audio-cache(); }
+            }
+        }
+
+        SettingRow {
             label: "Local files";
             detail: root.local-folders.length == 0
                 ? "Plays your own music from folders on this PC, under Local files."
@@ -481,9 +505,11 @@ export component SettingsDialog inherits Dialog {
             }
         }
 
+        // Short enough that the audio cache's row above keeps the tab no
+        // taller than the others.
         if root.local-folders.length > 0: RemovableList {
             names: root.local-folders;
-            room: 300px;
+            room: 240px;
             remove(i) => { root.remove-folder(i); }
         }
     }

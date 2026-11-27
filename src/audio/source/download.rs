@@ -2,11 +2,15 @@
 //! out a lost connection, and asking for a fresh URL once googlevideo refuses one.
 
 use std::{
+    fs::File,
     io::{self, Read},
+    os::windows::fs::FileExt,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
-use super::{CHUNK, Download, Refresh, Source};
+use super::{CHUNK, Download, Keep, Refresh, Source};
 
 const READ_BUF: usize = 64 * 1024;
 const MAX_RETRIES: u32 = 4;
@@ -19,8 +23,90 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 /// the same client once more, then each of the others.
 const MAX_REFRESHES: u32 = crate::streams::CLIENT_COUNT as u32;
 
+/// Deletes the file at its path once dropped, which is none once renamed away.
+struct Unfinished(PathBuf);
+
+impl Drop for Unfinished {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A stream being written out to be kept, deleted should it not all arrive.
+pub(super) struct Part {
+    keep: Keep,
+    /// The stream's first bytes, written once the file is made.
+    head: Vec<u8>,
+    /// Made only once bytes after the head have reached the reader, so a
+    /// song's start never waits on the disk. The file closes before its
+    /// path deletes it.
+    open: Option<(File, Unfinished)>,
+}
+
+impl Part {
+    pub(super) fn new(keep: Keep, head: Vec<u8>) -> Self {
+        Self {
+            keep,
+            head,
+            open: None,
+        }
+    }
+
+    /// The file beside where it is to be kept, made with the head first.
+    fn file(&mut self) -> io::Result<&File> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let (file, _) = match &mut self.open {
+            Some(open) => open,
+            slot => {
+                let n = NEXT.fetch_add(1, Ordering::Relaxed);
+                let path = self.keep.path.with_extension(format!("{n}.part"));
+                if let Some(dir) = self.keep.path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                let open = (File::create(&path)?, Unfinished(path));
+                write_at(&open.0, &std::mem::take(&mut self.head), 0)?;
+                slot.insert(open)
+            }
+        };
+        Ok(file)
+    }
+
+    fn write(&mut self, bytes: &[u8], at: u64) -> io::Result<()> {
+        write_at(self.file()?, bytes, at)
+    }
+
+    fn finish(mut self) {
+        // Made now should the head have been all of it.
+        let renamed = self.file().map(|_| ()).and_then(|()| {
+            let (file, path) = self.open.take().expect("just made");
+            // Closed first, as Windows renames no open file.
+            drop(file);
+            std::fs::rename(&path.0, &self.keep.path)
+        });
+        match renamed {
+            Ok(()) => (self.keep.kept)(),
+            Err(e) => log::debug!("could not keep a song played: {e}"),
+        }
+    }
+}
+
+/// Positional, so ranges written out of order land in place.
+fn write_at(file: &File, mut bytes: &[u8], mut at: u64) -> io::Result<()> {
+    while !bytes.is_empty() {
+        let n = file.seek_write(bytes, at)?;
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        bytes = &bytes[n..];
+        at += n as u64;
+    }
+    Ok(())
+}
+
 impl Download {
-    pub(super) fn run(&self, mut source: Source, mut refresh: Refresh) {
+    /// With `part`, every byte that arrives is written out too, and the file
+    /// kept once whole.
+    pub(super) fn run(&self, mut source: Source, mut refresh: Refresh, mut part: Option<Part>) {
         if let Err(e) = check_host(&source.url) {
             return self.fail(e);
         }
@@ -42,6 +128,9 @@ impl Download {
                         state.done = true;
                         drop(state);
                         self.changed.notify_all();
+                        if let Some(part) = part.take() {
+                            part.finish();
+                        }
                         return;
                     }
                     state.evict();
@@ -63,7 +152,7 @@ impl Download {
                         .unwrap();
                 }
             };
-            let error = match self.fetch(&source, offset, total, &mut buf) {
+            let error = match self.fetch(&source, offset, total, &mut buf, &mut part) {
                 Ok(()) => {
                     retries = 0;
                     drops = 0;
@@ -134,13 +223,15 @@ impl Download {
     }
 
     /// Fetches one range starting at `offset`, reading through `buf`: to the
-    /// end of its block, or all of a stream of unknown length.
+    /// end of its block, or all of a stream of unknown length. A `part` that
+    /// fails to take the bytes is dropped, and the song plays on unkept.
     fn fetch(
         &self,
         source: &Source,
         offset: u64,
         total: u64,
         buf: &mut [u8],
+        part: &mut Option<Part>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut request = crate::http::blocking_client().get(&source.url);
         for (name, value) in &source.headers {
@@ -184,9 +275,14 @@ impl Download {
                 return Ok(());
             }
             state.put(at, &buf[..n]);
-            at += n as u64;
             drop(state);
             self.changed.notify_all();
+            // Once the lock is let go, so no read waits on the disk.
+            if let Some(Err(e)) = part.as_mut().map(|part| part.write(&buf[..n], at)) {
+                log::debug!("could not keep a song played: {e}");
+                *part = None;
+            }
+            at += n as u64;
         }
         // An empty answer would be asked again forever.
         if at == offset {
@@ -362,7 +458,7 @@ mod tests {
         let (tx, stopped) = std::sync::mpsc::channel();
         let worker = Arc::clone(&download);
         thread::spawn(move || {
-            worker.run(source(URL, 100 * MB), refresh_to(URL, 100 * MB));
+            worker.run(source(URL, 100 * MB), refresh_to(URL, 100 * MB), None);
             let _ = tx.send(());
         });
         let wait = Duration::from_millis(200);
@@ -370,6 +466,60 @@ mod tests {
         drop(reader);
         assert!(stopped.recv_timeout(Duration::from_secs(5)).is_ok());
         assert!(!download.whole(URL), "never done");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lily-keep-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn files(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).unwrap().count()
+    }
+
+    #[test]
+    fn keeps_a_stream_once_all_of_it_has_arrived() {
+        let dir = scratch("whole");
+        let path = dir.join("a.audio");
+        let (tx, kept) = std::sync::mpsc::channel();
+        let keep = Keep {
+            path: path.clone(),
+            kept: Box::new(move || {
+                let _ = tx.send(());
+            }),
+        };
+        // All of it in its head, so nothing is asked of the network.
+        let head = vec![7; 1000];
+        let source = Source {
+            head: head.clone(),
+            ..source(URL, 1000)
+        };
+        let download = Download::start(source, refresh_to(URL, 1000), Some(keep));
+        assert!(crate::audio::in_use(&path), "spared as it is written");
+        kept.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), head);
+        assert_eq!(files(&dir), 1, "renamed into place");
+        assert!(download.whole(URL), "and plays from memory");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stream_cut_off_leaves_no_file() {
+        let dir = scratch("cut");
+        let keep = Keep {
+            path: dir.join("a.audio"),
+            kept: Box::new(|| panic!("kept a stream cut off")),
+        };
+        let mut part = Part::new(keep, vec![7; 1000]);
+        assert!(!dir.exists(), "nothing written before the stream goes on");
+        part.write(&[7; 10], 1000).unwrap();
+        assert_eq!(files(&dir), 1, "being written");
+        let download = Download::sized(2000);
+        download.cancel();
+        download.run(source(URL, 2000), refresh_to(URL, 2000), Some(part));
+        assert_eq!(files(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

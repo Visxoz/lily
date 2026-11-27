@@ -140,6 +140,7 @@ impl PlayerResponse {
             file: None,
             client: None,
             head: Arc::default(),
+            asked: None,
         }
     }
 }

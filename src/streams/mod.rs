@@ -165,6 +165,10 @@ pub struct ResolvedStream {
     /// Its first bytes, once `warm` has them, for its download to start from.
     #[serde(skip)]
     pub head: Arc<OnceLock<Vec<u8>>>,
+    /// The quality it was resolved at and whether the Premium path was
+    /// wanted, which a copy kept to play again is filed under.
+    #[serde(skip)]
+    pub asked: Option<(crate::settings::Quality, bool)>,
 }
 
 /// With `itag`, that format only, so a download can carry on from another

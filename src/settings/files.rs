@@ -96,12 +96,12 @@ pub(crate) fn save_json(path: &Path, value: &impl Serialize, what: &str) -> bool
 
 /// Deletes the files in `dir` that `counts` takes, first any last changed
 /// over `max_age` ago, then the oldest until the rest fit `budget`; never
-/// `keep`, which still counts toward the budget.
+/// those `spare` takes, which still count toward the budget.
 pub fn prune(
     dir: &Path,
     budget: u64,
     max_age: Option<Duration>,
-    keep: Option<&Path>,
+    spare: impl Fn(&Path) -> bool,
     counts: impl Fn(&Path) -> bool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -128,10 +128,22 @@ pub fn prune(
             // Sorted oldest first, so none after is old either.
             break;
         }
-        if Some(path.as_path()) != keep && std::fs::remove_file(&path).is_ok() {
+        if !spare(&path) && std::fs::remove_file(&path).is_ok() {
             total -= size;
         }
     }
+}
+
+/// Marks a kept file as just used, for the prune's order; false when there
+/// is none.
+pub fn touch(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Attributes only, which a decoder's open of the same file shares.
+    std::fs::File::options()
+        .access_mode(windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()))
+        .is_ok()
 }
 
 /// Numbers one file's saves, which run off the UI thread and can finish

@@ -16,12 +16,11 @@ use std::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
-    time::SystemTime,
 };
 
 use url::Url;
 
-use crate::api::Track;
+use crate::{api::Track, settings::touch};
 
 /// Answers kept for the run, at a few hundred bytes each.
 const LOOKUP_LIMIT: usize = 500;
@@ -245,25 +244,17 @@ fn file_name(id: &str, kind: &str) -> Option<String> {
     (!id.is_empty()).then(|| format!("{id}-{kind}.mp4"))
 }
 
-/// Marks a kept clip as just used, for the prune's order; false when there
-/// is none.
-fn touch(path: &Path) -> bool {
-    use std::os::windows::fs::OpenOptionsExt;
-    // Attributes only, which the decoder's open of the same clip shares.
-    std::fs::File::options()
-        .access_mode(windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES)
-        .open(path)
-        .and_then(|file| file.set_modified(SystemTime::now()))
-        .is_ok()
-}
-
 /// Deletes the clips used longest ago until the rest fit `budget`, never the
 /// one just kept. A `.part` counts too, so one a crash left behind goes in
 /// turn; one being written is the newest, so it never does.
 fn prune(dir: &Path, kept: &Path, budget: u64) {
-    crate::settings::prune(dir, budget, None, Some(kept), |path| {
-        path.extension().is_some_and(|x| x == "mp4" || x == "part")
-    });
+    crate::settings::prune(
+        dir,
+        budget,
+        None,
+        |path| path == kept,
+        |path| path.extension().is_some_and(|x| x == "mp4" || x == "part"),
+    );
 }
 
 #[cfg(test)]
@@ -287,7 +278,7 @@ mod tests {
     fn prunes_the_oldest_clips_past_the_budget() {
         let dir = std::env::temp_dir().join(format!("lily-motion-prune-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let old = SystemTime::now() - std::time::Duration::from_secs(60);
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
         for (name, age) in [("a.mp4", 4), ("z.0.part", 3), ("b.mp4", 2), ("c.mp4", 1)] {
             let path = dir.join(name);
             std::fs::write(&path, [0; 10]).unwrap();

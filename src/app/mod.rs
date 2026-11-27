@@ -36,7 +36,7 @@ use crate::{
     platform::media_controls::{Action, Controls},
     presence::PresenceHandle,
     queue::{Queue, Repeat},
-    settings::{self, Accent, CROSSFADE_SECS, Settings},
+    settings::{self, AUDIO_CACHE_MB, Accent, CROSSFADE_SECS, Settings},
     update,
 };
 use artwork::RowArt;
@@ -113,6 +113,8 @@ pub struct App {
     local_shown: Cell<u64>,
     /// Settings' devices after "System default": cpal ID and name.
     output_devices: RefCell<Vec<(String, String)>>,
+    /// Bumped as the audio cache is measured, so only the last shows.
+    audio_cache_asks: Cell<u64>,
     tray: OnceCell<crate::platform::tray::Tray>,
     /// Set as the window minimises on its way to the tray.
     hide_pending: Cell<bool>,
@@ -256,6 +258,7 @@ impl App {
             local_check: Cell::new(None),
             local_shown: Cell::new(0),
             output_devices: RefCell::default(),
+            audio_cache_asks: Cell::new(0),
             tray: OnceCell::new(),
             hide_pending: Cell::new(false),
             mini: RefCell::new(None),
@@ -312,6 +315,15 @@ impl App {
             .map(|secs| format!("{secs} s").into())
             .collect();
         ui.set_crossfade_lengths(ModelRc::new(VecModel::from(lengths)));
+        let sizes: Vec<SharedString> = AUDIO_CACHE_MB
+            .iter()
+            .map(|&mb| preferences::size_text(u64::from(mb) * 1_000_000).into())
+            .collect();
+        ui.set_audio_cache_sizes(ModelRc::new(VecModel::from(sizes)));
+        // Until measured as Settings opens.
+        ui.set_audio_cache_detail(
+            "Songs played lately, kept so they play again without the network.".into(),
+        );
         app
     }
 

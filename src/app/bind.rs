@@ -7,6 +7,7 @@ use crate::{
     Api as ApiGlobal, AppWindow, LyricsExtras,
     api::{Rating, Route, SearchKind},
     audio::eq,
+    audio_cache::AudioCache,
     scrobbling::Service,
     settings::{Accent, Look, Quality},
 };
@@ -258,6 +259,11 @@ impl App {
         });
         on!(on_install_update, |app| app.install_update());
         on!(on_list_output_devices, |app| app.list_output_devices());
+        on!(on_show_audio_cache, |app| app.show_audio_cache(|_| ()));
+        on!(on_set_audio_cache, |app, index| app
+            .set_audio_cache(index as usize));
+        on!(on_clear_audio_cache, |app| app
+            .show_audio_cache(AudioCache::clear));
         on!(on_set_output_device, |app, index| app
             .choose_output_device(index as usize));
         on!(on_remove_folder, |app, index| app

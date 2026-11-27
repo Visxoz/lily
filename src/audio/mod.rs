@@ -25,7 +25,7 @@ use std::{
 use engine::Engine;
 use output::Output;
 use source::Download;
-pub use source::{Refresh, Source};
+pub use source::{Refresh, Source, in_use};
 
 pub const MIN_SPEED: f32 = 0.5;
 pub const MAX_SPEED: f32 = 2.0;
@@ -65,9 +65,16 @@ pub struct StreamSpec {
 
 pub enum Input {
     /// Downloaded, with how to ask for it again should googlevideo refuse
-    /// the URL.
-    Stream(Source, Refresh),
+    /// the URL, and where to keep it once whole, if anywhere.
+    Stream(Source, Refresh, Option<Keep>),
     File(PathBuf),
+}
+
+/// Where a stream is kept once all of it has arrived, and what then runs, on
+/// the download's thread.
+pub struct Keep {
+    pub path: PathBuf,
+    pub kept: Box<dyn FnOnce() + Send>,
 }
 
 pub struct Opening {
@@ -325,9 +332,9 @@ impl Player {
     /// all of the same stream, so a replay neither asks nor downloads again.
     fn start(&self, spec: StreamSpec) -> (Arc<Download>, Opening) {
         let download = match spec.input {
-            Input::Stream(source, refresh) => self
+            Input::Stream(source, refresh, keep) => self
                 .held(&source.url)
-                .unwrap_or_else(|| Download::start(source, refresh)),
+                .unwrap_or_else(|| Download::start(source, refresh, keep)),
             Input::File(path) => Download::open(path),
         };
         (download, spec.opening)

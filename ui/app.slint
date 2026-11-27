@@ -164,6 +164,11 @@ export component AppWindow inherits Window {
     /// The speeds offered, and the index of the one playing, or -1.
     in property <[string]> speeds;
     in property <int> speed;
+    /// The audio cache's sizes offered, the chosen one's index, and what
+    /// its row says of how much it holds.
+    in property <[string]> audio-cache-sizes;
+    in property <int> audio-cache-size;
+    in property <string> audio-cache-detail;
     in property <string> premium-status;
     in property <[AccentChoice]> accents;
     in property <int> accent-choice;
@@ -280,6 +285,10 @@ export component AppWindow inherits Window {
     callback list-output-devices();
     callback set-output-device(index: int);
     callback set-speed(index: int);
+    /// Measures the audio cache for its Settings row.
+    callback show-audio-cache();
+    callback set-audio-cache(index: int);
+    callback clear-audio-cache();
     callback set-look(index: int);
     callback set-accent(index: int);
     callback lastfm-connect();
@@ -304,6 +313,7 @@ export component AppWindow inherits Window {
     changed settings-open => {
         if root.settings-open {
             root.list-output-devices();
+            root.show-audio-cache();
         } else {
             keys.focus();
         }
@@ -639,6 +649,11 @@ export component AppWindow inherits Window {
             speeds: root.speeds;
             speed: root.speed;
             set-speed(i) => { root.set-speed(i); }
+            audio-cache-sizes: root.audio-cache-sizes;
+            audio-cache-size: root.audio-cache-size;
+            audio-cache-detail: root.audio-cache-detail;
+            set-audio-cache(i) => { root.set-audio-cache(i); }
+            clear-audio-cache => { root.clear-audio-cache(); }
             equaliser: root.equaliser;
             eq-presets: root.eq-presets;
             eq-preset: root.eq-preset;

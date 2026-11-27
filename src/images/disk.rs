@@ -46,7 +46,7 @@ pub fn prune_disk() {
 }
 
 fn prune(dir: &Path, budget: u64, max_age: Duration) {
-    crate::settings::prune(dir, budget, Some(max_age), None, |_| true);
+    crate::settings::prune(dir, budget, Some(max_age), |_| false, |_| true);
 }
 
 #[cfg(test)]

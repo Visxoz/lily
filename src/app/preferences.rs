@@ -12,8 +12,9 @@ use super::{App, SPEEDS, opaque, s};
 use crate::{
     AppWindow, LyricsExtras, Theme,
     audio::eq,
+    audio_cache::AudioCache,
     images, local,
-    settings::{self, Accent, CROSSFADE_SECS, Look, Settings},
+    settings::{self, AUDIO_CACHE_MB, Accent, CROSSFADE_SECS, Look, Settings},
 };
 
 impl App {
@@ -48,6 +49,12 @@ impl App {
             SPEEDS
                 .iter()
                 .position(|&s| s == settings.speed)
+                .map_or(-1, |i| i as i32),
+        );
+        ui.set_audio_cache_size(
+            AUDIO_CACHE_MB
+                .iter()
+                .position(|&mb| mb == settings.audio_cache_mb)
                 .map_or(-1, |i| i as i32),
         );
         ui.set_close_to_tray(settings.close_to_tray);
@@ -212,6 +219,43 @@ impl App {
         ui.set_output_detail(detail.into());
     }
 
+    /// Measures the audio cache for its Settings row off the UI thread, once
+    /// `tidy` (a prune or a clear) has run there.
+    pub(super) fn show_audio_cache(
+        self: &Rc<Self>,
+        tidy: impl FnOnce(&AudioCache) + Send + 'static,
+    ) {
+        let asked = self.audio_cache_asks.get() + 1;
+        self.audio_cache_asks.set(asked);
+        let measure = self.rt.spawn_blocking(move || {
+            let cache = AudioCache::default();
+            tidy(&cache);
+            cache.size()
+        });
+        self.spawn(measure, move |app, size| {
+            // The last asked for, as a clear can land after a later look.
+            if let Ok(size) = size
+                && app.audio_cache_asks.get() == asked
+            {
+                let detail = format!(
+                    "{} of songs played lately, kept so they play again without the network.",
+                    size_text(size)
+                );
+                app.ui().set_audio_cache_detail(detail.into());
+            }
+        });
+    }
+
+    /// Keeps as much as Settings lists at `index`, pruning to it at once.
+    pub(super) fn set_audio_cache(self: &Rc<Self>, index: usize) {
+        let Some(&mb) = AUDIO_CACHE_MB.get(index) else {
+            return;
+        };
+        self.update_settings(|s| s.audio_cache_mb = mb);
+        crate::audio_cache::set_budget(self.state.borrow().settings.audio_cache_budget());
+        self.show_audio_cache(AudioCache::prune);
+    }
+
     /// Saves `address` as the proxy for the next start, returning why it
     /// won't do, or nothing.
     pub(super) fn set_proxy(&self, address: &str) -> SharedString {
@@ -248,6 +292,15 @@ impl App {
     }
 }
 
+/// A size in decimal units, as the audio cache's are offered.
+pub(super) fn size_text(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{} GB", (bytes as f64 / 1e8).round() / 10.0)
+    } else {
+        format!("{} MB", (bytes as f64 / 1e6).round())
+    }
+}
+
 /// What the proxy row says of the one saved, which is `pending` until the
 /// next start, as the clients took theirs at startup.
 pub(super) fn proxy_detail(saved: bool, pending: bool) -> &'static str {
@@ -258,5 +311,18 @@ pub(super) fn proxy_detail(saved: bool, pending: bool) -> &'static str {
             "Follows the proxy set in Windows. Enter an http:// or socks5:// address to use another."
         }
         (false, true) => "Follows the proxy set in Windows from Lily's next start.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_sizes_as_offered() {
+        assert_eq!(size_text(0), "0 MB");
+        assert_eq!(size_text(12_400_000), "12 MB");
+        assert_eq!(size_text(1_000_000_000), "1 GB");
+        assert_eq!(size_text(1_460_000_000), "1.5 GB");
     }
 }

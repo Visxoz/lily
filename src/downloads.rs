@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     api::Track,
     audio::{self, Refresh, Source},
+    audio_cache::AudioCache,
     settings,
     streams::ResolvedStream,
 };
@@ -59,7 +60,9 @@ pub struct Saved {
 }
 
 impl Saved {
-    /// Downloads `track`'s stream and cover, then writes them. Blocking.
+    /// Downloads `track`'s stream and cover, then writes them; the stream
+    /// is moved from the audio cache instead should it hold that very file,
+    /// and downloaded should the move fail. Blocking.
     pub fn fetch(
         track: Track,
         stream: ResolvedStream,
@@ -69,7 +72,12 @@ impl Saved {
         if !crate::api::is_video_id(&track.id) {
             return Err("not a YouTube song".into());
         }
-        let blocks = audio::fetch(source, refresh)?;
+        let held = AudioCache::default().holding(&track.id, &stream);
+        let fetch = move || audio::fetch(source, refresh);
+        let (blocks, fetch) = match held {
+            Some(_) => (Vec::new(), Some(fetch)),
+            None => (fetch()?, None),
+        };
         std::fs::create_dir_all(dir()).map_err(|e| format!("couldn't save it: {e}"))?;
         // Without its cover it still plays, with the cover online.
         let cover = track
@@ -82,11 +90,20 @@ impl Saved {
             });
         // Written last, so a failed download never leaves a song indexed
         // without its audio.
-        settings::write_atomic_parts(
-            &audio_path(&track.id, &stream.mime),
-            blocks.iter().map(Vec::as_slice),
-        )
-        .map_err(|e| format!("couldn't save it: {e}"))?;
+        let audio = audio_path(&track.id, &stream.mime);
+        let moved = held.is_some_and(|from| {
+            std::fs::rename(from, &audio)
+                .map_err(|e| log::debug!("could not move a song played to the downloads: {e}"))
+                .is_ok()
+        });
+        if !moved {
+            let blocks = match fetch {
+                Some(fetch) => fetch()?,
+                None => blocks,
+            };
+            settings::write_atomic_parts(&audio, blocks.iter().map(Vec::as_slice))
+                .map_err(|e| format!("couldn't save it: {e}"))?;
+        }
         Ok(Self {
             track,
             stream,

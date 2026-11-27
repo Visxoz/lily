@@ -3,11 +3,14 @@
 
 use std::{future::Future, rc::Rc, sync::Arc, time::Instant};
 
-use super::premium_state::{PREMIUM_YES, PremiumShared, premium_dry_run, premium_player};
+use super::premium_state::{
+    PREMIUM_NO, PREMIUM_YES, PremiumShared, premium_dry_run, premium_player,
+};
 use crate::app::App;
 use crate::{
     api::{self, Api},
-    audio::{Input, Opening, Refresh, Source, StreamSpec},
+    audio::{Input, Keep, Opening, Refresh, Source, StreamSpec},
+    audio_cache::AudioCache,
     settings::Quality,
     streams::{self, ResolvedStream, premium},
 };
@@ -56,6 +59,31 @@ async fn web_fallback(
     Ok(stream)
 }
 
+/// The player's spec for `stream`, with `keep` seeing all of it before the
+/// opening takes its mime, which the copy kept is filed with.
+fn spec(
+    mut stream: ResolvedStream,
+    start_at: f64,
+    keep: impl FnOnce(&ResolvedStream) -> Option<Keep>,
+    remote: impl FnOnce(ResolvedStream) -> (Source, Refresh),
+) -> StreamSpec {
+    let file = stream.file.take();
+    let keep = file.is_none().then(|| keep(&stream)).flatten();
+    let opening = Opening {
+        mime: std::mem::take(&mut stream.mime),
+        loudness_db: stream.loudness_db,
+        start_at,
+    };
+    let input = match file {
+        Some(path) => Input::File(path),
+        None => {
+            let (source, refresh) = remote(stream);
+            Input::Stream(source, refresh, keep)
+        }
+    };
+    StreamSpec { input, opening }
+}
+
 fn source(stream: ResolvedStream) -> Source {
     Source {
         url: stream.url,
@@ -82,8 +110,11 @@ struct Resolver {
 
 impl Resolver {
     /// Premium when signed in with Premium, otherwise the first plain-URL
-    /// client that answers, and signed in, the web client as a last resort.
-    async fn resolve(&self) -> Result<ResolvedStream, String> {
+    /// client that answers, and signed in, the web client as a last resort;
+    /// with whether the Premium path answered, so a copy kept of it has
+    /// nothing better to wait for. One got while Premium was skipped, backed
+    /// off or failing is asked for again once the Premium path is taken.
+    async fn resolve(&self) -> Result<(ResolvedStream, bool), String> {
         let Self {
             api,
             premium,
@@ -100,6 +131,7 @@ impl Resolver {
         let started = Instant::now();
         let visitor = api.visitor_data(false).await?;
         let cookie = api.cookie().filter(|_| *want_premium);
+        let mut settled = false;
         if let Some(cookie) = cookie.as_deref().filter(|_| !premium.skipped()) {
             match premium_player(premium).await {
                 Ok(player) => {
@@ -131,9 +163,12 @@ impl Resolver {
                                 if stream.premium { "Premium" } else { "web" },
                                 started.elapsed().as_millis()
                             );
-                            return Ok(stream);
+                            return Ok((stream, true));
                         }
-                        Ok(premium::Outcome::NoPremiumFormats) => premium.record_miss(),
+                        Ok(premium::Outcome::NoPremiumFormats) => {
+                            premium.record_miss();
+                            settled = true;
+                        }
                         Err(e) => {
                             premium::diag(format!(
                                 "{video_id}: Premium path failed, using the free stream: {e}"
@@ -186,7 +221,7 @@ impl Resolver {
                 dry.elapsed().as_millis()
             ));
         }
-        self.free(&visitor, None).await
+        Ok((self.free(&visitor, None).await?, settled))
     }
 
     /// The stream to download. Counts nothing towards the Premium state, as
@@ -302,20 +337,58 @@ impl App {
         (id == video_id && self.player.holds(&stream.url)).then(|| (stream.clone(), *at))
     }
 
-    /// A downloaded or local file plays from there, online or not, ahead
-    /// of anything prefetched.
+    /// A downloaded or local file plays from there, online or not, then a
+    /// download the player holds whole, then one kept from playing lately,
+    /// ahead of anything prefetched, as the song moved on from stays
+    /// prefetched for Previous.
     pub(in crate::app) fn resolve_future(
         self: &Rc<Self>,
         video_id: String,
         prefetched: Option<ResolvedStream>,
     ) -> impl Future<Output = Result<ResolvedStream, String>> + Send + 'static {
         // Only `offline_stream` vouches for a file, which may since have gone.
-        let ready = (self.offline_stream(&video_id)).or(prefetched.filter(|s| s.file.is_none()));
+        let offline = self.offline_stream(&video_id);
+        let prefetched = prefetched.filter(|s| s.file.is_none());
+        let held = prefetched
+            .as_ref()
+            .is_some_and(|s| self.player.holds(&s.url));
+        let (quality, uncached) = {
+            let mut state = self.state.borrow_mut();
+            let uncached = state.playback.uncached.take_if(|id| *id == video_id);
+            (state.settings.quality, uncached.is_some())
+        };
         let resolver = self.resolver(video_id);
+        let want_premium = resolver.want_premium;
+        // An account taken as without Premium plays any copy kept, but one
+        // found to have it after all asks again for those kept meanwhile.
+        let premium_copy = want_premium && self.premium.status() != PREMIUM_NO;
         async move {
-            match ready {
+            if let Some(stream) = offline {
+                return Ok(stream);
+            }
+            let prefetched = match prefetched {
+                Some(stream) if held => return Ok(stream),
+                prefetched => prefetched,
+            };
+            if !uncached {
+                let id = resolver.video_id.clone();
+                // Off Tokio's workers, as a sleeping disk can take a while.
+                let kept = tokio::task::spawn_blocking(move || {
+                    AudioCache::default().find(&id, quality, premium_copy)
+                });
+                if let Ok(Some(stream)) = kept.await {
+                    return Ok(stream);
+                }
+            }
+            match prefetched {
                 Some(stream) => Ok(stream),
-                None => resolver.resolve().await,
+                None => resolver
+                    .resolve()
+                    .await
+                    .map(|(stream, settled)| ResolvedStream {
+                        asked: Some((quality, want_premium && settled)),
+                        ..stream
+                    }),
             }
         }
     }
@@ -333,22 +406,21 @@ impl App {
     pub(in crate::app) fn stream_spec(
         &self,
         video_id: &str,
-        mut stream: ResolvedStream,
+        stream: ResolvedStream,
         start_at: f64,
     ) -> StreamSpec {
-        let opening = Opening {
-            mime: std::mem::take(&mut stream.mime),
-            loudness_db: stream.loudness_db,
+        // A song downloaded to keep is on disk already.
+        let downloaded = self.state.borrow().downloads.contains(video_id);
+        spec(
+            stream,
             start_at,
-        };
-        let input = match stream.file.take() {
-            Some(path) => Input::File(path),
-            None => {
-                let (source, refresh) = self.remote_source(video_id, stream);
-                Input::Stream(source, refresh)
-            }
-        };
-        StreamSpec { input, opening }
+            |stream| {
+                (!downloaded)
+                    .then(|| AudioCache::default().keep(video_id, stream))
+                    .flatten()
+            },
+            |stream| self.remote_source(video_id, stream),
+        )
     }
 
     /// Where `video_id`'s stream downloads from. Should googlevideo refuse its
@@ -395,5 +467,27 @@ impl App {
                 premium::diag(format!("could not prepare the player: {e}"));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_a_stream_with_its_mime() {
+        let stream = ResolvedStream {
+            mime: "audio/webm".into(),
+            ..Default::default()
+        };
+        let mut seen = String::new();
+        let keep = |stream: &ResolvedStream| {
+            seen.clone_from(&stream.mime);
+            None
+        };
+        let remote = |stream| (source(stream), Box::new(|_| Err(String::new())) as Refresh);
+        let spec = spec(stream, 0.0, keep, remote);
+        assert_eq!(seen, "audio/webm");
+        assert_eq!(spec.opening.mime, "audio/webm");
     }
 }
