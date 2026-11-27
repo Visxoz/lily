@@ -75,18 +75,17 @@ export component PlayerBar inherits Rectangle {
     // quality badge goes and the volume slider shortens.
     property <bool> narrow: root.width < 1270px;
 
-    // The song as the menu opened, so a block names the artist its entry did
-    // though the song moves on meanwhile.
-    property <string> menu-song;
     property <string> block-label;
     property <string> pin-label;
+    // An open menu is about the song it opened on, so it goes as that moves on.
+    property <string> playing-id: Api.playing-id;
+    changed playing-id => { menu.close(); }
 
     function open-menu(x: length, y: length) {
         if root.has-track {
             root.menu-at = { x: x, y: y };
-            root.menu-song = Api.playing-id;
-            root.block-label = Api.block-label("song", root.menu-song);
-            root.pin-label = Api.playing-local ? "" : Api.pin-label("song", root.menu-song);
+            root.block-label = Api.block-label("song", Api.playing-id);
+            root.pin-label = Api.playing-local ? "" : Api.pin-label("song", Api.playing-id);
             menu.show();
         }
     }
@@ -109,7 +108,7 @@ export component PlayerBar inherits Rectangle {
         if root.pin-label != "": MenuEntry {
             text: root.pin-label;
             icon: Icons.pin;
-            activated => { Api.card-action("pin", "song", root.menu-song); }
+            activated => { Api.card-action("pin", "song", Api.playing-id); }
         }
 
         MenuEntry {
@@ -135,7 +134,7 @@ export component PlayerBar inherits Rectangle {
         if root.block-label != "": MenuEntry {
             text: root.block-label;
             icon: Icons.block;
-            activated => { Api.card-action("block", "song", root.menu-song); }
+            activated => { Api.card-action("block", "song", Api.playing-id); }
         }
     }
 

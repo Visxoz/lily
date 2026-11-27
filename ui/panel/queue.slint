@@ -76,10 +76,11 @@ export component QueueRow inherits Rectangle {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
-    // The song as the menu opened, as an edit may hand this row another.
-    property <string> menu-song;
     property <string> block-label;
     property <string> pin-label;
+    // An edit may hand this row another song, which an open menu isn't about.
+    property <string> item-id: root.item.id;
+    changed item-id => { menu.close(); }
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -125,11 +126,11 @@ export component QueueRow inherits Rectangle {
         if !root.many && root.block-label != "": MenuEntry {
             text: root.block-label;
             icon: Icons.block;
-            activated => { Api.card-action("block", "song", root.menu-song); }
+            activated => { Api.card-action("block", "song", root.item.id); }
         }
 
         if root.youtube: SongAccountEntries {
-            song: root.menu-song;
+            song: root.item.id;
             can-clear-rating: !root.item.current;
             pin-label: root.pin-label;
         }
@@ -141,9 +142,8 @@ export component QueueRow inherits Rectangle {
         pointer-event(ev) => {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up && !root.dragging {
                 root.menu-at = { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y };
-                root.menu-song = root.item.id;
-                root.block-label = Api.block-label("song", root.menu-song);
-                root.pin-label = Api.pin-label("song", root.menu-song);
+                root.block-label = Api.block-label("song", root.item.id);
+                root.pin-label = Api.pin-label("song", root.item.id);
                 menu.show();
             }
             // Sent with no button, as the grab is lost.

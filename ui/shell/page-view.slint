@@ -82,19 +82,6 @@ export component PageView inherits Rectangle {
         }
     }
 
-    // A search's filters, above its results rather than among them, so they
-    // stay while one loads or has none; wrapping, so a narrow page has them all.
-    filters := PillGroup {
-        x: Theme.page-padding;
-        y: 16px;
-        width: root.width - 2 * Theme.page-padding;
-        height: self.preferred-height;
-        visible: Api.search-filter >= 0;
-        flex-wrap: wrap;
-        labels: Api.search-filters;
-        current: Api.search-filter;
-        picked(i) => { Api.filter-search(i); }
-    }
     property <length> filters-height: filters.visible ? filters.height + 24px : 0;
     // The page left keeps its place while it fades, as the filters come or go.
     property <length> rows-top;
@@ -158,6 +145,20 @@ export component PageView inherits Rectangle {
                 }
             }
         }
+    }
+
+    // A search's filters, over its results rather than among them, so they stay
+    // while one loads or has none, or the page left fades; wrapping, for a narrow page.
+    filters := PillGroup {
+        x: Theme.page-padding;
+        y: 16px;
+        width: root.width - 2 * Theme.page-padding;
+        height: self.preferred-height;
+        visible: Api.search-filter >= 0;
+        flex-wrap: wrap;
+        labels: Api.search-filters;
+        current: Api.search-filter;
+        picked(i) => { Api.filter-search(i); }
     }
 
     // Sticky title once the header scrolls away.

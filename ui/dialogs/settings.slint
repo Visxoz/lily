@@ -170,19 +170,21 @@ component SectionTabs inherits Rectangle {
     }
 }
 
-/// Names, each with a button taking it out, scrolling past `room` so many
-/// can't push the dialog past the window.
+/// Names, each with a button taking it out, scrolling past four rows less what
+/// the tab's `other` list takes (two at most), so the tab stays no taller.
 component RemovableList {
     in property <[string]> names;
-    in property <length> room;
+    /// How many names the other list holds.
+    in property <int> other;
     callback remove(index: int);
-    height: min(root.room, root.names.length * 40px);
+    property <length> line: 40px;
+    height: min((4 - min(root.other, 2)) * root.line, root.names.length * root.line);
     list := ListView {
         width: 100%;
         height: 100%;
         for name[i] in root.names: HorizontalLayout {
             width: list.visible-width;
-            height: 40px;
+            height: root.line;
             // Clear of the scroll bar.
             padding-right: 14px;
             spacing: 8px;
@@ -495,24 +497,21 @@ export component SettingsDialog inherits Dialog {
             }
         }
 
-        // The two lists share four rows' room, half each once both are long,
-        // so the tab is no taller than the others.
         if root.local-folders.length > 0: RemovableList {
             names: root.local-folders;
-            room: 160px - min(root.blocked-artists.length * 40px, 80px);
+            other: root.blocked-artists.length;
             remove(i) => { root.remove-folder(i); }
         }
 
         SettingRow {
             label: "Blocked artists";
-            detail: root.blocked-artists.length == 0
-                ? "Their songs are left out of what plays unless you pick one yourself. Block an artist from a song's or artist's menu."
-                : "Their songs are left out of what plays unless you pick one yourself. Remove one here to unblock it.";
+            detail: "Their songs are left out of what plays unless you pick one yourself. "
+                + (root.blocked-artists.length == 0 ? "Block an artist from a song's or artist's menu." : "Remove one here to unblock it.");
         }
 
         if root.blocked-artists.length > 0: RemovableList {
             names: root.blocked-artists;
-            room: 160px - min(root.local-folders.length * 40px, 80px);
+            other: root.local-folders.length;
             remove(i) => { root.unblock-artist(i); }
         }
     }
