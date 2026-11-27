@@ -2,7 +2,7 @@
 //! demuxer as a seekable file, blocking reads until their bytes arrive. The
 //! download follows the reader, so a seek ahead is fetched next and the gaps
 //! after. A file on disk is served in place, and a stream to be kept is
-//! written out as it arrives.
+//! written out once whole.
 
 mod blocks;
 mod download;
@@ -17,7 +17,6 @@ use std::{
 };
 
 use blocks::State;
-use download::Part;
 use symphonia::core::io::MediaSource;
 
 use super::Keep;
@@ -98,8 +97,8 @@ impl Download {
         download
     }
 
-    /// With `keep`, the stream is written out as it arrives and kept once
-    /// whole, unless it is a window, which never is.
+    /// With `keep`, the stream is written out once whole, unless it is a
+    /// window, which never is.
     pub fn start(mut source: Source, refresh: Refresh, keep: Option<Keep>) -> Arc<Self> {
         // Only here, as `fetch_all` must keep every byte.
         let window = source.size > WINDOW_FROM;
@@ -113,14 +112,12 @@ impl Download {
         state.window = window;
         // `run` carries on after the bytes held. Taken, as the source is kept
         // for refreshes all song long.
-        let head = std::mem::take(&mut source.head);
-        state.put(0, &head);
-        let part = keep.map(|keep| Part::new(keep, head));
+        state.put(0, &std::mem::take(&mut source.head));
         let download = Arc::new(download);
         let worker = Arc::clone(&download);
         thread::Builder::new()
             .name("stream-download".into())
-            .spawn(move || worker.run(source, refresh, part))
+            .spawn(move || worker.run(source, refresh, keep))
             .expect("download thread spawns");
         download
     }

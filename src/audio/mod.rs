@@ -12,8 +12,10 @@ mod source;
 mod stereo;
 
 use std::{
+    fs::File,
+    io,
     ops::Range,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
@@ -76,12 +78,12 @@ pub enum Input {
 /// the download's thread.
 pub struct Keep {
     pub path: PathBuf,
-    pub kept: Kept,
+    /// Handed what writes the whole stream to a file, should it still be wanted.
+    pub kept: Box<dyn FnOnce(WriteOut) -> io::Result<()> + Send>,
 }
 
-/// Handed the whole part beside `Keep::path`, moves it there, should it still
-/// be wanted. A part left where it is is deleted.
-pub type Kept = Box<dyn FnOnce(&Path) -> std::io::Result<()> + Send>;
+/// Writes the whole stream to a file, a block at a time.
+pub type WriteOut<'a> = &'a mut dyn FnMut(&mut File) -> io::Result<()>;
 
 pub struct Opening {
     pub mime: String,

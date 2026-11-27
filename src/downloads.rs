@@ -67,9 +67,8 @@ pub struct Saved {
 }
 
 impl Saved {
-    /// Downloads `track`'s stream and cover, then writes them; the stream
-    /// is moved from the audio cache instead should it hold that very file,
-    /// and downloaded should the move fail. Blocking.
+    /// Moves `track`'s stream from the audio cache should it hold that very
+    /// file, else downloads it, then its cover, and leaves the cache. Blocking.
     pub fn fetch(
         track: Track,
         stream: ResolvedStream,
@@ -79,13 +78,22 @@ impl Saved {
         if !crate::api::is_video_id(&track.id) {
             return Err("not a YouTube song".into());
         }
-        let held = AudioCache::default().holding(&track.id, &stream);
-        let fetch = move || audio::fetch(source, refresh);
-        let (blocks, fetch) = match held {
-            Some(_) => (Vec::new(), Some(fetch)),
-            None => (fetch()?, None),
-        };
-        std::fs::create_dir_all(dir()).map_err(|e| format!("couldn't save it: {e}"))?;
+        let saving = |e: std::io::Error| format!("couldn't save it: {e}");
+        std::fs::create_dir_all(dir()).map_err(saving)?;
+        let cache = AudioCache::default();
+        let audio = audio_path(&track.id, &stream.mime);
+        let moved = cache.holding(&track.id, &stream).is_some_and(|from| {
+            std::fs::rename(from, &audio)
+                .map_err(|e| log::debug!("could not move a song played to the downloads: {e}"))
+                .is_ok()
+        });
+        if !moved {
+            let blocks = audio::fetch(source, refresh)?;
+            let write = |file: &mut std::fs::File| {
+                (blocks.iter()).try_for_each(|b| std::io::Write::write_all(file, b))
+            };
+            settings::write_atomic_parts(&audio, write).map_err(saving)?;
+        }
         // Without its cover it still plays, with the cover online.
         let cover = track
             .large_thumb()
@@ -95,22 +103,8 @@ impl Saved {
                     .map_err(|e| log::warn!("could not save a cover: {e}"))
                     .is_ok()
             });
-        // Written last, so a failed download never leaves a song indexed
-        // without its audio.
-        let audio = audio_path(&track.id, &stream.mime);
-        let moved = held.is_some_and(|from| {
-            std::fs::rename(from, &audio)
-                .map_err(|e| log::debug!("could not move a song played to the downloads: {e}"))
-                .is_ok()
-        });
-        if !moved {
-            let blocks = match fetch {
-                Some(fetch) => fetch()?,
-                None => blocks,
-            };
-            settings::write_atomic_parts(&audio, blocks.iter().map(Vec::as_slice))
-                .map_err(|e| format!("couldn't save it: {e}"))?;
-        }
+        // Not on disk twice.
+        cache.remove(&track.id);
         Ok(Self {
             track,
             stream,

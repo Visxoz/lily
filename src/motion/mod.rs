@@ -252,7 +252,7 @@ fn prune(dir: &Path, kept: &Path, budget: u64) {
         dir,
         budget,
         None,
-        |path| path == kept,
+        |path| path != kept && std::fs::remove_file(path).is_ok(),
         |path| path.extension().is_some_and(|x| x == "mp4" || x == "part"),
     );
 }

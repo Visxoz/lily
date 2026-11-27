@@ -51,21 +51,32 @@ fn budget() -> u64 {
     BUDGET.load(Ordering::Relaxed)
 }
 
-/// Copies that failed to play this run, oldest first, each with its place in
-/// `FAILURES`, refused until a copy kept after is kept over them.
-static FAILED: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
-/// Counts failures, so the failing stream's own keep, should it finish after,
-/// lifts no refusal.
-static FAILURES: AtomicU64 = AtomicU64::new(0);
-/// Songs failing in a row stop playback well before this many.
+/// Copies that failed to play this run, refused until a copy kept after is
+/// kept over them.
+struct Failed {
+    /// Oldest first, each with its failure's number.
+    copies: Vec<(PathBuf, u64)>,
+    /// Failures so far, so the failing stream's own keep, should it finish
+    /// after, lifts no refusal.
+    count: u64,
+}
+
+static FAILED: Mutex<Failed> = Mutex::new(Failed {
+    copies: Vec::new(),
+    count: 0,
+});
+/// Past this many the oldest refusal goes, costing one more failed try of it.
 const FAILED_LIMIT: usize = 16;
 
-fn failed() -> MutexGuard<'static, Vec<(PathBuf, u64)>> {
+fn failed() -> MutexGuard<'static, Failed> {
     FAILED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+#[derive(Clone)]
 pub struct AudioCache {
     dir: PathBuf,
+    /// Whether a song is downloaded to keep, which is then never kept here.
+    downloaded: fn(&str) -> bool,
 }
 
 /// In the data folder, kept through signing in or out.
@@ -73,6 +84,7 @@ impl Default for AudioCache {
     fn default() -> Self {
         Self {
             dir: settings::data_dir().join("audio"),
+            downloaded: crate::downloads::holds,
         }
     }
 }
@@ -85,12 +97,11 @@ impl AudioCache {
         api::is_video_id(id).then(|| (path("audio"), path("json")))
     }
 
-    /// `id`'s sidecar and file, should the file be as long as it says and
-    /// not have failed to play. One gone or cut short is deleted; another
-    /// error may pass, so the files stay.
+    /// `id`'s sidecar and file, should the file be as long as it says and not
+    /// have failed to play. One gone or cut short is deleted unless in use.
     fn whole(&self, id: &str) -> Option<(Entry, PathBuf)> {
         let (audio, sidecar) = self.paths(id)?;
-        if failed().iter().any(|(p, _)| *p == audio) {
+        if failed().copies.iter().any(|(p, _)| *p == audio) {
             return None;
         }
         let entry: Entry = settings::read_json(&sidecar)?;
@@ -101,6 +112,8 @@ impl AudioCache {
         match std::fs::metadata(&audio) {
             Ok(meta) if size > 0 && meta.len() == size => Some((entry, audio)),
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => None,
+            // One in use may be a new copy whose sidecar is still to come.
+            _ if audio::in_use(&audio) => None,
             _ => {
                 self.remove(id);
                 None
@@ -108,9 +121,8 @@ impl AudioCache {
         }
     }
 
-    /// `id`'s kept stream, should it have been kept at `quality` or better
-    /// (playing it costs no data), through the Premium path should that be
-    /// wanted, and be whole. Blocking.
+    /// `id`'s kept stream, should it be whole and kept at `quality` or better,
+    /// through the Premium path should that be wanted. Blocking.
     pub fn find(&self, id: &str, quality: Quality, premium_path: bool) -> Option<ResolvedStream> {
         let (entry, audio) = self.whole(id)?;
         if entry.quality < quality || (premium_path && !entry.premium_path) {
@@ -123,9 +135,8 @@ impl AudioCache {
         })
     }
 
-    /// `id`'s kept file, should it be `stream`'s very encode, so a song
-    /// downloaded to keep can be moved from here rather than fetched again.
-    /// Blocking.
+    /// `id`'s kept file, should it be `stream`'s very encode, for Downloads to
+    /// move rather than fetch again. Blocking.
     pub fn holding(&self, id: &str, stream: &ResolvedStream) -> Option<PathBuf> {
         let (entry, audio) = self.whole(id)?;
         ((entry.stream.itag, entry.stream.size) == (stream.itag, stream.size)).then_some(audio)
@@ -137,17 +148,17 @@ impl AudioCache {
         let Some((audio, _)) = self.paths(id) else {
             return;
         };
-        let mut failed = failed();
-        failed.retain(|(p, _)| *p != audio);
-        if failed.len() >= FAILED_LIMIT {
-            failed.remove(0);
+        let failed = &mut *failed();
+        failed.copies.retain(|(p, _)| *p != audio);
+        if failed.copies.len() >= FAILED_LIMIT {
+            failed.copies.remove(0);
         }
-        failed.push((audio, FAILURES.fetch_add(1, Ordering::Relaxed)));
+        failed.copies.push((audio, failed.count));
+        failed.count += 1;
     }
 
-    /// Where `id`'s stream is kept as it plays, unless it can't be: of no
-    /// known length, past the budget, or not resolved to play. Touches no
-    /// disk, as it runs on the UI thread.
+    /// Where `id`'s stream is kept once played, unless of no known length,
+    /// past the budget or not resolved to play. Touches no disk (UI thread).
     pub fn keep(&self, id: &str, stream: &ResolvedStream) -> Option<Keep> {
         let (quality, premium_path) = stream.asked?;
         let (path, sidecar) = self.paths(id)?;
@@ -164,26 +175,25 @@ impl AudioCache {
             quality,
             premium_path,
         };
-        let (audio, since) = (path.clone(), FAILURES.load(Ordering::Relaxed));
-        let cache = Self {
-            dir: self.dir.clone(),
-        };
-        let kept = move |part: &Path| -> std::io::Result<()> {
-            // A better copy kept stays.
+        let (audio, since, cache) = (path.clone(), failed().count, self.clone());
+        let kept = move |write: audio::WriteOut| {
+            // A better copy kept stays, and a song downloaded needs none.
             let better = (cache.whole(&entry.id)).is_some_and(|(held, _)| {
                 (held.quality, held.premium_path) > (quality, premium_path)
             });
-            if !better {
-                std::fs::rename(part, &audio)?;
-                // Checked once in place, so a download finishing meanwhile
-                // either is seen here or removes it after.
-                if crate::downloads::holds(&entry.id)
-                    || !settings::save_json(&sidecar, &entry, "a song played")
-                {
-                    let _ = std::fs::remove_file(&audio);
-                } else {
-                    failed().retain(|(p, failure)| *p != audio || *failure >= since);
-                }
+            if better || (cache.downloaded)(&entry.id) {
+                return Ok(());
+            }
+            std::fs::create_dir_all(&cache.dir)?;
+            settings::write_atomic_parts(&audio, write)?;
+            // Checked again once in place, so a download finishing meanwhile
+            // either is seen here or removes it after.
+            if (cache.downloaded)(&entry.id)
+                || !settings::save_json(&sidecar, &entry, "a song played")
+            {
+                cache.remove(&entry.id);
+            } else {
+                (failed().copies).retain(|(p, failure)| *p != audio || *failure >= since);
             }
             cache.prune();
             Ok(())
@@ -201,18 +211,23 @@ impl AudioCache {
         self.prune_to(budget());
     }
 
-    /// The sidecars of the songs it took go with them.
+    /// Each song's sidecar goes first, so it is never found without its file.
     fn prune_to(&self, budget: u64) {
-        settings::prune(&self.dir, budget, None, audio::in_use, |path| {
-            path.extension().is_some_and(|x| x == "audio")
-        });
-        self.drop_leftovers(false);
+        let remove = |song: &Path| {
+            if audio::in_use(song) {
+                return false;
+            }
+            let _ = std::fs::remove_file(song.with_extension("json"));
+            std::fs::remove_file(song).is_ok()
+        };
+        let songs = |path: &Path| path.extension().is_some_and(|x| x == "audio");
+        settings::prune(&self.dir, budget, None, remove, songs);
     }
 
     /// Run at startup: deletes what a crash left. Blocking.
     pub fn sweep(&self) {
         let _tidying = tidying();
-        self.drop_leftovers(true);
+        self.drop_leftovers();
     }
 
     /// Every song but those playing or queued, and any still being written.
@@ -222,22 +237,21 @@ impl AudioCache {
         self.prune_to(0);
     }
 
-    /// Sidecars without their song, and `after_crash`, files never finished:
-    /// parts, sidecars' temporary files, songs without their sidecar. Never
-    /// a song's being written.
-    fn drop_leftovers(&self, after_crash: bool) {
+    /// Temporary files, and songs or sidecars without the other, unless their
+    /// song is in use.
+    fn drop_leftovers(&self) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
         for path in entries.filter_map(|e| Some(e.ok()?.path())) {
             let left = match path.extension().and_then(|x| x.to_str()) {
                 Some("json") => !path.with_extension("audio").exists(),
-                Some("part" | "tmp") => after_crash,
-                Some("audio") => after_crash && !path.with_extension("json").exists(),
+                Some("tmp") => true,
+                Some("audio") => !path.with_extension("json").exists(),
                 _ => false,
             };
-            // A song started since launch writes its part, then its sidecar
-            // after the rename, all held under its song's name.
+            // A song started since launch writes its temporary files under
+            // its song's name, then its sidecar after the rename.
             let song = path
                 .file_prefix()
                 .map(|id| self.dir.join(id).with_extension("audio"));
@@ -281,14 +295,15 @@ impl AudioCache {
 mod tests {
     use super::*;
 
-    /// None that Downloads would hold.
     const ID: &str = "zzLilyTest0";
 
     fn cache(name: &str) -> AudioCache {
         let dir = std::env::temp_dir().join(format!("lily-audio-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        AudioCache { dir }
+        AudioCache {
+            dir,
+            downloaded: |_| false,
+        }
     }
 
     fn stream(size: u64, asked: (Quality, bool)) -> ResolvedStream {
@@ -305,15 +320,17 @@ mod tests {
     const FREE: (Quality, bool) = (Quality::High, false);
     const PREMIUM: (Quality, bool) = (Quality::High, true);
 
-    /// Keeps `bytes` as `id` as a download would, through `keep`'s closure.
+    /// Hands `keep` `bytes` as a download would once whole.
+    fn hand(keep: Keep, bytes: &[u8]) {
+        let mut write = |file: &mut std::fs::File| std::io::Write::write_all(file, bytes);
+        (keep.kept)(&mut write).unwrap();
+    }
+
     fn kept_as(cache: &AudioCache, id: &str, bytes: &[u8], asked: (Quality, bool)) {
-        let stream = stream(bytes.len() as u64, asked);
-        let keep = cache.keep(id, &stream).unwrap();
-        let part = keep.path.with_extension("0.part");
-        std::fs::write(&part, bytes).unwrap();
-        (keep.kept)(&part).unwrap();
-        // As the download's part deletes itself once dropped.
-        let _ = std::fs::remove_file(part);
+        hand(
+            cache.keep(id, &stream(bytes.len() as u64, asked)).unwrap(),
+            bytes,
+        );
     }
 
     fn kept(cache: &AudioCache, bytes: &[u8], asked: (Quality, bool)) {
@@ -375,9 +392,7 @@ mod tests {
         // The failing stream's own keep, finishing after its failure.
         let keep = cache.keep(ID, &stream(10, PREMIUM)).unwrap();
         cache.failed_to_play(ID);
-        let part = keep.path.with_extension("0.part");
-        std::fs::write(&part, [1; 10]).unwrap();
-        (keep.kept)(&part).unwrap();
+        hand(keep, &[1; 10]);
         assert!(!has(&cache, ID, FREE));
         let held = cache.holding(ID, &stream(10, FREE));
         assert_eq!(held, None, "not to Downloads");
@@ -391,8 +406,13 @@ mod tests {
     fn a_kept_song_of_the_wrong_length_is_dropped() {
         let cache = cache("length");
         kept(&cache, &[1; 10], FREE);
-        std::fs::write(cache.dir.join(format!("{ID}.audio")), [1; 9]).unwrap();
+        let audio = cache.dir.join(format!("{ID}.audio"));
+        std::fs::write(&audio, [1; 9]).unwrap();
+        let writing = audio::InUse::new(&audio);
         assert!(!has(&cache, ID, FREE), "cut short");
+        assert_eq!(files(&cache).len(), 2, "or a new copy, its sidecar to come");
+        drop(writing);
+        assert!(!has(&cache, ID, FREE));
         assert!(files(&cache).is_empty(), "both files gone");
         let _ = std::fs::remove_dir_all(&cache.dir);
     }
@@ -408,7 +428,20 @@ mod tests {
         other.asked = None;
         assert!(!keeps(ID, &other), "not resolved to play");
         assert!(!keeps("C:\\music\\a.flac", &stream(10, FREE)));
-        let _ = std::fs::remove_dir_all(&cache.dir);
+        assert!(
+            !cache.dir.exists(),
+            "nothing written until handed the stream"
+        );
+    }
+
+    #[test]
+    fn never_keeps_a_song_downloaded() {
+        let cache = AudioCache {
+            downloaded: |_| true,
+            ..cache("downloaded")
+        };
+        kept(&cache, &[1; 10], FREE);
+        assert!(!cache.dir.exists(), "nothing written");
     }
 
     #[test]
@@ -434,27 +467,29 @@ mod tests {
         let cache = cache("prune");
         kept(&cache, &[1; 10], FREE);
         kept_as(&cache, "aaaaaaaaaaa", &[1; 10], FREE);
+        let _playing = audio::InUse::new(&cache.dir.join("aaaaaaaaaaa.audio"));
         cache.prune_to(15);
-        assert_eq!(cache.size(), 10, "one of them went");
+        assert!(!has(&cache, ID, FREE), "one went");
         assert_eq!(files(&cache).len(), 2, "with its sidecar");
+        cache.prune_to(0);
+        assert!(has(&cache, "aaaaaaaaaaa", FREE), "never one in use");
         let _ = std::fs::remove_dir_all(&cache.dir);
     }
 
     #[test]
-    fn sweeps_away_what_a_crash_or_prune_left() {
+    fn sweeps_away_what_a_crash_left() {
         let cache = cache("sweep");
         kept(&cache, &[1; 10], FREE);
         let write = |name: &str| std::fs::write(cache.dir.join(name), [0; 4]).unwrap();
         let left = [
-            "aaaaaaaaaaa.3.part",
             "bbbbbbbbbbb.json",
             "ccccccccccc.audio",
             "ddddddddddd.4.tmp",
             "notes.txt",
         ];
         left.into_iter().for_each(write);
-        // A song started since launch, its part and then its rename.
-        let writing = ["fffffffffff.6.part", "ggggggggggg.audio"];
+        // A song started since launch, its temporary file and then its rename.
+        let writing = ["fffffffffff.6.tmp", "ggggggggggg.audio"];
         writing.into_iter().for_each(write);
         let _held = ["fffffffffff", "ggggggggggg"]
             .map(|id| audio::InUse::new(&cache.dir.join(format!("{id}.audio"))));
@@ -466,11 +501,11 @@ mod tests {
             let _ = std::fs::remove_file(cache.dir.join(name));
         }
         assert_eq!(cache.size(), 10, "songs only");
-        write("eeeeeeeeeee.5.part");
+        write("eeeeeeeeeee.5.tmp");
         cache.clear();
         assert_eq!(cache.size(), 0);
         assert!(!has(&cache, ID, FREE));
-        let still = ["eeeeeeeeeee.5.part", "notes.txt"];
+        let still = ["eeeeeeeeeee.5.tmp", "notes.txt"];
         assert_eq!(files(&cache), still, "one still being written stays");
         let _ = std::fs::remove_dir_all(&cache.dir);
     }

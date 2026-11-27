@@ -14,7 +14,6 @@ use crate::app::{App, browse::page::track_list_page};
 use crate::{
     Api as ApiGlobal, RowKind,
     api::{self, Route, Track},
-    audio_cache::AudioCache,
     downloads::Saved,
     local,
     streams::ResolvedStream,
@@ -116,15 +115,9 @@ impl App {
         let (source, refresh) = self.remote_source(&track.id, stream.clone());
         let title = track.title.clone();
         // Blocking, as the player's download is, so off Tokio's workers.
-        let save = self.rt.spawn_blocking(move || {
-            let id = track.id.clone();
-            let saved = Saved::fetch(track, stream, source, refresh);
-            // Not on disk twice.
-            if saved.is_ok() {
-                AudioCache::default().remove(&id);
-            }
-            saved
-        });
+        let save = self
+            .rt
+            .spawn_blocking(move || Saved::fetch(track, stream, source, refresh));
         self.spawn(save, move |app, result| {
             let result = result
                 .unwrap_or_else(|_| Err("the download stopped".into()))

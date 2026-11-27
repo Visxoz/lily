@@ -3,6 +3,7 @@
 //! numbered so a late one can't overwrite a newer.
 
 use std::{
+    fs::File,
     io,
     path::{Path, PathBuf},
     sync::{
@@ -53,26 +54,21 @@ pub fn move_data_dir() {
 /// whole. Not flushed, as most saves run on the UI thread. Each write has its
 /// own temporary file, as rustypipe saves its cache from any worker.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    write_atomic_parts(path, [bytes])
+    write_atomic_parts(path, |file| io::Write::write_all(file, bytes))
 }
 
-/// `write_atomic` for bytes in parts, as a stream's blocks, which are then
-/// never joined in memory.
-pub fn write_atomic_parts<'a>(
+/// `write_atomic` for bytes `write` puts in the file in parts, as a stream's
+/// blocks, which are then never joined in memory.
+pub fn write_atomic_parts(
     path: &Path,
-    parts: impl IntoIterator<Item = &'a [u8]>,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let partial = path.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
-    let write = || {
-        let mut file = std::fs::File::create(&partial)?;
-        for part in parts {
-            io::Write::write_all(&mut file, part)?;
-        }
-        Ok(())
-    };
     // The file is closed by then, as Windows renames no open file.
-    let result = write().and_then(|()| std::fs::rename(&partial, path));
+    let result = File::create(&partial)
+        .and_then(|mut file| write(&mut file))
+        .and_then(|()| std::fs::rename(&partial, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
     }
@@ -94,14 +90,14 @@ pub(crate) fn save_json(path: &Path, value: &impl Serialize, what: &str) -> bool
     written.is_ok()
 }
 
-/// Deletes the files in `dir` that `counts` takes, first any last changed
-/// over `max_age` ago, then the oldest until the rest fit `budget`; never
-/// those `spare` takes, which still count toward the budget.
+/// Deletes through `remove` the files in `dir` that `counts` takes, first any
+/// last changed over `max_age` ago, then the oldest until the rest fit
+/// `budget`; one `remove` keeps, returning false, still counts toward it.
 pub fn prune(
     dir: &Path,
     budget: u64,
     max_age: Option<Duration>,
-    spare: impl Fn(&Path) -> bool,
+    remove: impl Fn(&Path) -> bool,
     counts: impl Fn(&Path) -> bool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -128,7 +124,7 @@ pub fn prune(
             // Sorted oldest first, so none after is old either.
             break;
         }
-        if !spare(&path) && std::fs::remove_file(&path).is_ok() {
+        if remove(&path) {
             total -= size;
         }
     }
