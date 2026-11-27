@@ -196,6 +196,20 @@ pub const AUDIO_CACHE_MB: [u32; 7] = [20, 40, 100, 250, 500, 1000, 2000];
 /// About ten songs.
 pub const DEFAULT_AUDIO_CACHE_MB: u32 = 40;
 
+/// One of those sizes in bytes.
+pub const fn mb_bytes(mb: u32) -> u64 {
+    mb as u64 * 1_000_000
+}
+
+/// A saved list's entries that read, one by one, so one that won't loses only itself.
+fn each_read<T: serde::de::DeserializeOwned>(
+    stored: Vec<serde_json::Value>,
+) -> impl Iterator<Item = T> {
+    stored
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -414,15 +428,19 @@ impl Settings {
         if !file.contains_key("quality") && file.get("premium_audio") == Some(&false.into()) {
             file.insert("quality".into(), "normal".into());
         }
+        // Each field reads on its own, so a whole file that reads is what the loop would keep.
+        if let Ok(settings) = Self::deserialize(&file) {
+            return settings;
+        }
         let mut kept = serde_json::Map::new();
         for (key, value) in file {
             kept.insert(key.clone(), value);
-            if serde_json::from_value::<Self>(kept.clone().into()).is_err() {
+            if Self::deserialize(&kept).is_err() {
                 log::warn!("setting {key} could not be read; using its default");
                 kept.remove(&key);
             }
         }
-        serde_json::from_value(kept.into()).unwrap_or_default()
+        Self::deserialize(&kept).unwrap_or_default()
     }
 
     pub fn set_quality(&mut self, quality: Quality) {
@@ -431,7 +449,7 @@ impl Settings {
 
     /// The audio cache's size in bytes.
     pub fn audio_cache_budget(&self) -> u64 {
-        u64::from(self.audio_cache_mb) * 1_000_000
+        mb_bytes(self.audio_cache_mb)
     }
 
     pub fn equaliser(&self) -> Option<crate::audio::eq::Gains> {

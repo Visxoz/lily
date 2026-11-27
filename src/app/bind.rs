@@ -20,9 +20,7 @@ impl App {
             ($target:ident . $setter:ident, |$app:ident $(, $arg:ident)*| $body:expr) => {{
                 let weak = Rc::downgrade(self);
                 $target.$setter(move |$($arg),*| {
-                    if let Some($app) = weak.upgrade() {
-                        $body
-                    }
+                    weak.upgrade().map(|$app| $body).unwrap_or_default()
                 });
             }};
             ($setter:ident, $($rest:tt)*) => {
@@ -272,13 +270,7 @@ impl App {
             .remove_folder(index as usize));
         on!(on_unblock_artist, |app, index| app
             .unblock_at(index as usize));
-        // Not through `on!`, as it answers.
-        let weak = Rc::downgrade(self);
-        ui.on_set_proxy(move |address| {
-            weak.upgrade()
-                .map(|app| app.set_proxy(&address))
-                .unwrap_or_default()
-        });
+        on!(on_set_proxy, |app, address| app.set_proxy(&address));
         on!(on_player_event, |app, kind, message| app
             .on_player_event(&kind, &message));
         on!(on_local_files_changed, |app| app.local_files_changed());
@@ -341,28 +333,16 @@ impl App {
             .header_action(&action));
         on!(api.on_filter_search, |app, index| app.filter_search(index));
         let filters: Vec<SharedString> = SearchKind::filter_labels().map(Into::into).collect();
-        api.set_search_filters(ModelRc::from(Rc::new(VecModel::from(filters))));
+        api.set_search_filters(ModelRc::new(VecModel::from(filters)));
         on!(api.on_card_action, |app, action, kind, id| app
             .card_action(&action, &kind, &id));
-        // Not through `on!`, as it answers.
-        let weak = Rc::downgrade(self);
-        api.on_block_label(move |kind, id| {
-            weak.upgrade()
-                .map(|app| app.block_label(app.artist_of(&kind, &id)))
-                .unwrap_or_default()
-        });
-        let weak = Rc::downgrade(self);
-        api.on_pin_label(move |kind, id| {
-            weak.upgrade()
-                .map(|app| app.pin_label(&kind, &id))
-                .unwrap_or_default()
-        });
-        let weak = Rc::downgrade(self);
-        api.on_track_block_label(move |section, index| {
-            weak.upgrade()
-                .map(|app| app.block_label(app.track_artist(section as usize, index as usize)))
-                .unwrap_or_default()
-        });
+        on!(api.on_block_label, |app, kind, id| app
+            .block_label(app.artist_of(&kind, &id)));
+        on!(api.on_pin_label, |app, kind, id| app.pin_label(&kind, &id));
+        on!(api.on_track_block_label, |app, section, index| app
+            .block_label(
+                app.track_artist(section as usize, index as usize)
+            ));
         on!(api.on_rate, |app, id, rating| app
             .rate(id.to_string(), Rating::from_index(rating)));
         on!(api.on_save_to_playlist, |app, id| app

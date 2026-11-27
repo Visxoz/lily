@@ -320,13 +320,11 @@ impl App {
         ui.set_crossfade_lengths(ModelRc::new(VecModel::from(lengths)));
         let sizes: Vec<SharedString> = AUDIO_CACHE_MB
             .iter()
-            .map(|&mb| preferences::size_text(u64::from(mb) * 1_000_000).into())
+            .map(|&mb| preferences::size_text(settings::mb_bytes(mb)).into())
             .collect();
         ui.set_audio_cache_sizes(ModelRc::new(VecModel::from(sizes)));
         // Until measured as Settings opens.
-        ui.set_audio_cache_detail(
-            "Songs played lately, kept so they play again without the network.".into(),
-        );
+        ui.set_audio_cache_detail(format!("Songs {}", preferences::AUDIO_CACHE_KEPT).into());
         app
     }
 

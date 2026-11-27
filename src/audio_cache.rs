@@ -41,7 +41,7 @@ fn tidying() -> MutexGuard<'static, ()> {
 
 /// The size Settings sets, read as each prune runs rather than as its
 /// download started, so a change mid-song counts at once.
-static BUDGET: AtomicU64 = AtomicU64::new(settings::DEFAULT_AUDIO_CACHE_MB as u64 * 1_000_000);
+static BUDGET: AtomicU64 = AtomicU64::new(settings::mb_bytes(settings::DEFAULT_AUDIO_CACHE_MB));
 
 pub fn set_budget(bytes: u64) {
     BUDGET.store(bytes, Ordering::Relaxed);

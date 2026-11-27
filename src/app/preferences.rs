@@ -152,12 +152,8 @@ impl App {
     }
 
     pub(super) fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
-        let settings = {
-            let mut state = self.state.borrow_mut();
-            change(&mut state.settings);
-            state.settings.clone()
-        };
-        settings.save();
+        change(&mut self.state.borrow_mut().settings);
+        self.state.borrow().settings.save();
         self.apply_settings_to_ui(&self.ui());
     }
 
@@ -238,10 +234,7 @@ impl App {
             if let Ok(size) = size
                 && app.audio_cache_asks.get() == asked
             {
-                let detail = format!(
-                    "{} of songs played lately, kept so they play again without the network.",
-                    size_text(size)
-                );
+                let detail = format!("{} of songs {AUDIO_CACHE_KEPT}", size_text(size));
                 app.ui().set_audio_cache_detail(detail.into());
             }
         });
@@ -253,7 +246,7 @@ impl App {
             return;
         };
         self.update_settings(|s| s.audio_cache_mb = mb);
-        crate::audio_cache::set_budget(self.state.borrow().settings.audio_cache_budget());
+        crate::audio_cache::set_budget(settings::mb_bytes(mb));
         self.show_audio_cache(AudioCache::prune);
     }
 
@@ -293,9 +286,14 @@ impl App {
     }
 }
 
+/// What the audio cache's Settings row says it keeps, after "Songs" or a size.
+pub(super) const AUDIO_CACHE_KEPT: &str =
+    "played lately, kept so they play again without the network.";
+
 /// A size in decimal units, as the audio cache's are offered.
 pub(super) fn size_text(bytes: u64) -> String {
-    if bytes >= 1_000_000_000 {
+    // From where MB would round to 1000.
+    if bytes >= 999_500_000 {
         format!("{} GB", (bytes as f64 / 1e8).round() / 10.0)
     } else {
         format!("{} MB", (bytes as f64 / 1e6).round())
@@ -323,6 +321,8 @@ mod tests {
     fn words_sizes_as_offered() {
         assert_eq!(size_text(0), "0 MB");
         assert_eq!(size_text(12_400_000), "12 MB");
+        assert_eq!(size_text(999_499_999), "999 MB");
+        assert_eq!(size_text(999_500_000), "1 GB", "never 1000 MB");
         assert_eq!(size_text(1_000_000_000), "1 GB");
         assert_eq!(size_text(1_460_000_000), "1.5 GB");
     }

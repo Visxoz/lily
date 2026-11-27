@@ -35,7 +35,7 @@ impl Serialize for Pins {
 
 impl From<Vec<serde_json::Value>> for Pins {
     fn from(saved: Vec<serde_json::Value>) -> Self {
-        super::blocked::each_read(saved)
+        super::each_read(saved)
             .map(|pin| match pin {
                 Saved::<Card, Track>::Song { song } => Card::song(&song),
                 Saved::Card(card) => card,
