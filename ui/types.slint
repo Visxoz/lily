@@ -21,7 +21,7 @@ export struct CardItem {
     art: image,
     round: bool,
     tint: color,
-    /// Pinned to the top of the sidebar.
+    /// Pinned to Library, marked in the sidebar and on Library's cards.
     pinned: bool,
 }
 
@@ -119,6 +119,9 @@ export global Api {
     callback block-label(kind: string, id: string) -> string;
     /// The same for a song row's "block" `track-action`.
     callback track-block-label(section: int, index: int) -> string;
+    /// "Pin to library" or "Unpin from library" for what a "pin" action acts
+    /// on, by its card kind, or empty while it can't be pinned.
+    callback pin-label(kind: string, id: string) -> string;
     /// Downloads a song in the queue, or removes its download.
     callback download(id: string, remove: bool);
     callback header-action(action: string);

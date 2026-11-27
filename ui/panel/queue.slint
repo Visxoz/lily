@@ -79,6 +79,7 @@ export component QueueRow inherits Rectangle {
     // The song as the menu opened, as an edit may hand this row another.
     property <string> menu-song;
     property <string> block-label;
+    property <string> pin-label;
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -130,6 +131,7 @@ export component QueueRow inherits Rectangle {
         if root.youtube: SongAccountEntries {
             song: root.item.id;
             can-clear-rating: !root.item.current;
+            pin-label: root.pin-label;
         }
     }
 
@@ -141,6 +143,7 @@ export component QueueRow inherits Rectangle {
                 root.menu-at = { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y };
                 root.menu-song = root.item.id;
                 root.block-label = Api.block-label("song", root.menu-song);
+                root.pin-label = Api.pin-label("song", root.menu-song);
                 menu.show();
             }
             // Sent with no button, as the grab is lost.

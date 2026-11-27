@@ -135,16 +135,24 @@ export component PageHeader {
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
     property <string> block-label;
+    property <string> pin-label;
 
     function open-menu(at: Point) {
         root.menu-at = at;
         root.block-label = Api.block-label("header", "");
+        root.pin-label = Api.pin-label("header", "");
         menu.show();
     }
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
         y: root.menu-at.y - root.absolute-position.y;
+        if root.pin-label != "": MenuEntry {
+            text: root.pin-label;
+            icon: Icons.pin;
+            activated => { Api.header-action("pin"); }
+        }
+
         MenuEntry {
             text: "Copy link";
             icon: Icons.link;

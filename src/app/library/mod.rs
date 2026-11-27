@@ -1,9 +1,10 @@
 //! The user's library: ratings, the add-to-playlist picker, saving albums
 //! and playlists and subscribing to artists, their own playlists' edits,
-//! blocked artists, and music kept offline.
+//! blocked artists, pins, and music kept offline.
 
 mod blocked;
 pub(super) mod offline;
+pub(super) mod pins;
 pub(super) mod playlist_edit;
 
 use std::rc::Rc;

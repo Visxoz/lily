@@ -51,15 +51,16 @@ export component LibraryRow inherits Rectangle {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+    property <string> pin-label;
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
         y: root.menu-at.y - root.absolute-position.y;
-        MenuEntry {
-            text: root.item.pinned ? "Unpin" : "Pin to top";
+        if root.pin-label != "": MenuEntry {
+            text: root.pin-label;
             icon: Icons.pin;
             active: root.item.pinned;
-            activated => { Api.card-action(root.item.pinned ? "unpin" : "pin", root.item.kind, root.item.id); }
+            activated => { Api.card-action("pin", root.item.kind, root.item.id); }
         }
 
         MenuEntry {
@@ -112,6 +113,7 @@ export component LibraryRow inherits Rectangle {
         pointer-event(ev) => {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up {
                 root.menu-at = { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y };
+                root.pin-label = Api.pin-label(root.item.kind, root.item.id);
                 menu.show();
             }
         }

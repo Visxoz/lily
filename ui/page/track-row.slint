@@ -87,11 +87,13 @@ export component TrackRow inherits Rectangle {
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
     property <string> block-label;
+    property <string> pin-label;
 
     function open-menu(x: length, y: length) {
         root.menu-at = { x: x, y: y };
         // By where the row is, as its action goes.
         root.block-label = Api.track-block-label(root.section, root.index);
+        root.pin-label = Api.pin-label("song", root.track.id);
         menu.show();
     }
 
@@ -127,6 +129,7 @@ export component TrackRow inherits Rectangle {
         if root.youtube: SongAccountEntries {
             song: root.track.id;
             can-clear-rating: root.track.id != Api.playing-id;
+            pin-label: root.pin-label;
         }
 
         if Api.own-playlist && root.section == 0: MenuEntry {

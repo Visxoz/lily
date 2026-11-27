@@ -1,7 +1,7 @@
 pub use rustypipe::model::PlaylistPrivacy;
 use rustypipe::model::{AlbumItem, MusicItem, TrackItem, paginator::Paginator};
 
-use super::convert::{HEADER_THUMB, join_artists, resize_thumb};
+use super::convert::{CARD_THUMB, HEADER_THUMB, join_artists, resize_thumb};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArtistRef {
@@ -9,7 +9,9 @@ pub struct ArtistRef {
     pub name: String,
 }
 
+/// Fields missing default, as pins keep tracks across versions.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Track {
     pub id: String,
     pub title: String,
@@ -20,7 +22,6 @@ pub struct Track {
     pub track_nr: Option<u16>,
     /// A music video, which may have a song version: audio only, and with
     /// Premium formats.
-    #[serde(default)]
     pub video: bool,
     /// The entry's own ID in the account's playlist it came from, which
     /// removing or moving it takes. Never saved, as it means nothing away
@@ -101,17 +102,71 @@ impl CardKind {
     }
 }
 
+/// Fields past `kind` and `id` default, as pins keep cards across versions.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Card {
     pub kind: CardKind,
     pub id: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub subtitle: String,
     pub thumb: Option<String>,
     /// Genre chips carry YouTube's accent colour.
     pub color: Option<u32>,
     /// The song a song card plays.
     pub track: Option<Track>,
+}
+
+impl Card {
+    /// A card with only a title.
+    pub fn bare(kind: CardKind, id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            title: title.into(),
+            subtitle: String::new(),
+            thumb: None,
+            color: None,
+            track: None,
+        }
+    }
+
+    /// A song card that plays `track`.
+    pub fn song(track: &Track) -> Self {
+        Self {
+            kind: CardKind::Song,
+            id: track.id.clone(),
+            title: track.title.clone(),
+            subtitle: track.artist_names(),
+            thumb: (track.thumb.as_deref()).map(|url| resize_thumb(url, CARD_THUMB)),
+            color: None,
+            track: Some(track.clone()),
+        }
+    }
+
+    /// An album, playlist or artist page as a card, for pinning; none for
+    /// other pages, or one without a title yet. Its art is the header's at
+    /// the card's size: square, so an artist's banner gives its centre.
+    pub fn pinning(route: &Route, header: &Header) -> Option<Self> {
+        let (kind, id) = match route {
+            Route::Album(id) => (CardKind::Album, id),
+            Route::Playlist(id) => (CardKind::Playlist, id),
+            // The artist's own ID, as Library's card names it, should the
+            // route be an alias.
+            Route::Artist(id) => (CardKind::Artist, header.artist_id.as_ref().unwrap_or(id)),
+            _ => return None,
+        };
+        (!header.title.is_empty()).then(|| Self {
+            kind,
+            id: id.clone(),
+            title: header.title.clone(),
+            subtitle: header.subtitle.clone(),
+            thumb: (header.thumb.as_deref()).map(|url| resize_thumb(url, CARD_THUMB)),
+            color: None,
+            track: None,
+        })
+    }
 }
 
 /// How a click on one track of a section fills the queue.
@@ -159,6 +214,14 @@ impl Section {
         match self {
             Self::Tracks { tracks, .. } => tracks.is_empty(),
             Self::Cards { cards, .. } => cards.is_empty(),
+        }
+    }
+
+    /// A card section's cards; none for tracks.
+    pub fn cards(&self) -> &[Card] {
+        match self {
+            Self::Cards { cards, .. } => cards,
+            Self::Tracks { .. } => &[],
         }
     }
 }
@@ -373,6 +436,38 @@ mod tests {
         assert_eq!(
             Route::Search("x".into(), Some(SearchKind::Songs)).link(),
             None
+        );
+    }
+
+    #[test]
+    fn pages_pin_as_cards() {
+        let mut header = Header {
+            title: "Currents".into(),
+            subtitle: "Tame Impala".into(),
+            thumb: Some("https://lh3.googleusercontent.com/a=w1440-h600-p-l90-rj".into()),
+            ..Default::default()
+        };
+        let album = Card::pinning(&Route::Album("MPREb1".into()), &header).unwrap();
+        assert_eq!((album.kind, album.id.as_str()), (CardKind::Album, "MPREb1"));
+        assert_eq!(
+            album.thumb.as_deref(),
+            Some("https://lh3.googleusercontent.com/a=w240-h240-l90-rj"),
+            "square, at the card's size"
+        );
+        let artist = Route::Artist("UC1".into());
+        assert_eq!(Card::pinning(&artist, &header).unwrap().id, "UC1");
+        header.artist_id = Some("UC2".into());
+        assert_eq!(
+            Card::pinning(&artist, &header).unwrap().id,
+            "UC2",
+            "by its own ID, not an alias"
+        );
+        assert_eq!(Card::pinning(&Route::Library, &header), None);
+        header.title.clear();
+        assert_eq!(
+            Card::pinning(&Route::Playlist("PL1".into()), &header),
+            None,
+            "not loaded yet"
         );
     }
 

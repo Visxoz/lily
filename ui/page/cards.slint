@@ -1,7 +1,7 @@
 import { Icons, Theme } from "../theme.slint";
 import { Api, CardItem } from "../types.slint";
 import { Art } from "../widgets/art.slint";
-import { PlayButton } from "../widgets/buttons.slint";
+import { Icon, PlayButton } from "../widgets/buttons.slint";
 import { MenuEntry, PopupMenu } from "../widgets/menu.slint";
 import { Layout } from "layout.slint";
 
@@ -19,6 +19,7 @@ export component Card {
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
     property <string> block-label;
+    property <string> pin-label;
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -39,6 +40,12 @@ export component Card {
             text: "Download";
             icon: Icons.download;
             activated => { Api.card-download(root.card.kind, root.card.id); }
+        }
+
+        if root.pin-label != "": MenuEntry {
+            text: root.pin-label;
+            icon: Icons.pin;
+            activated => { Api.card-action("pin", root.card.kind, root.card.id); }
         }
 
         if root.card.kind != "genre": MenuEntry {
@@ -73,6 +80,7 @@ export component Card {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up && !self.dragging {
                 root.menu-at = { x: self.pointer-x, y: self.absolute-position.y + self.mouse-y };
                 root.block-label = Api.block-label(root.card.kind, root.card.id);
+                root.pin-label = Api.pin-label(root.card.kind, root.card.id);
                 menu.show();
             }
             if ev.button != PointerEventButton.left {
@@ -143,11 +151,20 @@ export component Card {
             color: Theme.text;
         }
 
-        Text {
-            text: root.card.subtitle;
-            overflow: elide;
-            font-size: 13px;
-            color: Theme.text-secondary;
+        HorizontalLayout {
+            spacing: 4px;
+            if root.card.pinned: Icon {
+                y: (parent.height - self.height) / 2;
+                path: Icons.pin;
+                size: 14px;
+                color: Theme.accent;
+            }
+            Text {
+                text: root.card.subtitle;
+                overflow: elide;
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
         }
     }
 }

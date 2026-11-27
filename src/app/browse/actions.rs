@@ -1,15 +1,30 @@
 use std::{collections::HashSet, rc::Rc};
 
 use crate::api::{self, ArtistRef, CardKind, Page, QueueMode, Route, Section, Track};
-use crate::app::App;
+use crate::app::{App, State, library::pins::shown_cards};
 
-fn card_kind(kind: &str) -> Option<CardKind> {
+pub(in crate::app) fn card_kind(kind: &str) -> Option<CardKind> {
     match kind {
         "album" => Some(CardKind::Album),
         "playlist" => Some(CardKind::Playlist),
         "artist" => Some(CardKind::Artist),
+        "song" => Some(CardKind::Song),
         _ => None,
     }
+}
+
+/// A song by its ID: from the queue, the page's rows and cards, or the pins.
+pub(in crate::app) fn find_song<'a>(state: &'a State, id: &str) -> Option<&'a Track> {
+    let rows = || {
+        state.page.sections.iter().find_map(|s| match s {
+            Section::Tracks { tracks, .. } => tracks.iter().find(|t| t.id == id),
+            Section::Cards { .. } => None,
+        })
+    };
+    let cards = || shown_cards(state).find_map(|c| c.track.as_ref().filter(|t| t.id == id));
+    (state.queue.items().find(|t| t.id == id))
+        .or_else(rows)
+        .or_else(cards)
 }
 
 impl App {
@@ -175,6 +190,9 @@ impl App {
         if action == "block" {
             return self.toggle_block(self.artist_of("header", ""));
         }
+        if action == "pin" {
+            return self.toggle_pin("header", "");
+        }
         let (tracks, shuffle_playlist, unloaded, radio_id) = {
             let state = self.state.borrow();
             let Some(header) = &state.page.header else {
@@ -224,15 +242,7 @@ impl App {
     pub(in crate::app) fn card_action(self: &Rc<Self>, action: &str, kind: &str, id: &str) {
         match action {
             "copy-link" => self.copy_link(api::link(kind, id)),
-            "pin" | "unpin" => {
-                self.update_settings(|s| {
-                    s.pinned.retain(|p| p != id);
-                    if action == "pin" {
-                        s.pinned.push(id.to_owned());
-                    }
-                });
-                self.list_library();
-            }
+            "pin" => self.toggle_pin(kind, id),
             "block" => self.toggle_block(self.artist_of(kind, id)),
             _ => {}
         }
@@ -269,18 +279,7 @@ impl App {
     }
 
     fn song_card(&self, id: &str) -> Option<Track> {
-        self.state
-            .borrow()
-            .page
-            .sections
-            .iter()
-            .find_map(|section| match section {
-                Section::Cards { cards, .. } => cards
-                    .iter()
-                    .find(|c| c.id == id)
-                    .and_then(|c| c.track.clone()),
-                Section::Tracks { .. } => None,
-            })
+        find_song(&self.state.borrow(), id).cloned()
     }
 
     pub(in crate::app) fn play_song_card(self: &Rc<Self>, id: &str) {

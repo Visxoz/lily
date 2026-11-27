@@ -6,6 +6,7 @@ mod account;
 mod blocked;
 mod files;
 mod history;
+mod pins;
 mod searches;
 mod session;
 
@@ -20,6 +21,7 @@ pub use files::{
 };
 pub(crate) use files::{read_json, save_json};
 pub use history::History;
+pub use pins::Pins;
 pub use searches::Searches;
 pub use session::Session;
 
@@ -262,8 +264,9 @@ pub struct Settings {
     pub output_device: Option<OutputDevice>,
     /// The signed-in account's picture, shown at once on the next start.
     pub account_photo: Option<String>,
-    /// Playlist IDs pinned to the top of the sidebar, first pinned first.
-    pub pinned: Vec<String>,
+    /// Songs, albums, playlists and artists pinned to Library, first pinned
+    /// first, for every account on this PC; its playlists lead the sidebar.
+    pub pinned: Pins,
     /// Artists whose songs play only when chosen, for every account on this
     /// PC; YouTube is never told.
     pub blocked_artists: Blocked,
@@ -374,7 +377,7 @@ impl Default for Settings {
             local_folders: Vec::new(),
             output_device: None,
             account_photo: None,
-            pinned: Vec::new(),
+            pinned: Pins::default(),
             blocked_artists: Blocked::default(),
         }
     }

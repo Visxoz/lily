@@ -5,17 +5,17 @@ use std::rc::Rc;
 
 use slint::{ModelRc, SharedString, VecModel};
 
-use crate::api::{ArtistRef, CardKind, Section};
-use crate::app::App;
+use super::pins::shown_cards;
+use crate::api::{ArtistRef, CardKind};
+use crate::app::{App, browse::actions::find_song};
 use crate::settings::Blocked;
 
 impl App {
-    /// The artist a menu blocks: a queued song's or song card's first, an
-    /// artist card's, or the artist page's from `"header"`. Song rows go by
+    /// The artist a menu blocks: a song's first, an artist card's, pinned
+    /// ones too, or the artist page's from `"header"`. Song rows go by
     /// `track_artist`.
     pub(in crate::app) fn artist_of(&self, kind: &str, id: &str) -> Option<ArtistRef> {
         let state = self.state.borrow();
-        let sections = &state.page.sections;
         match kind {
             "header" => state.page.header.as_ref().and_then(|h| {
                 Some(ArtistRef {
@@ -23,29 +23,13 @@ impl App {
                     name: h.title.clone(),
                 })
             }),
-            "artist" => sections.iter().find_map(|s| match s {
-                Section::Cards { cards, .. } => cards
-                    .iter()
-                    .find(|c| c.kind == CardKind::Artist && c.id == id)
-                    .map(|c| ArtistRef {
-                        id: Some(c.id.clone()),
-                        name: c.title.clone(),
-                    }),
-                Section::Tracks { .. } => None,
-            }),
-            "song" => state
-                .queue
-                .items()
-                .find(|t| t.id == id)
-                .or_else(|| {
-                    sections.iter().find_map(|s| match s {
-                        Section::Cards { cards, .. } => cards
-                            .iter()
-                            .find_map(|c| c.track.as_ref().filter(|t| t.id == id)),
-                        Section::Tracks { .. } => None,
-                    })
-                })
-                .and_then(|t| t.artists.first().cloned()),
+            "artist" => shown_cards(&state)
+                .find(|c| c.kind == CardKind::Artist && c.id == id)
+                .map(|c| ArtistRef {
+                    id: Some(c.id.clone()),
+                    name: c.title.clone(),
+                }),
+            "song" => find_song(&state, id).and_then(|t| t.artists.first().cloned()),
             _ => None,
         }
     }

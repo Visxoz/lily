@@ -79,12 +79,14 @@ export component PlayerBar inherits Rectangle {
     // though the song moves on meanwhile.
     property <string> menu-song;
     property <string> block-label;
+    property <string> pin-label;
 
     function open-menu(x: length, y: length) {
         if root.has-track {
             root.menu-at = { x: x, y: y };
             root.menu-song = Api.playing-id;
             root.block-label = Api.block-label("song", root.menu-song);
+            root.pin-label = Api.playing-local ? "" : Api.pin-label("song", root.menu-song);
             menu.show();
         }
     }
@@ -102,6 +104,12 @@ export component PlayerBar inherits Rectangle {
             text: "Save to playlist";
             icon: Icons.save-to-playlist;
             activated => { Api.save-to-playlist(Api.playing-id); }
+        }
+
+        if root.pin-label != "": MenuEntry {
+            text: root.pin-label;
+            icon: Icons.pin;
+            activated => { Api.card-action("pin", "song", root.menu-song); }
         }
 
         MenuEntry {

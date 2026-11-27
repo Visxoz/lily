@@ -8,7 +8,7 @@ use slint::{ComponentHandle, Model};
 use crate::app::{App, HistoryEntry, browse::items::track_row, s};
 use crate::{
     Api as ApiGlobal, RowItem, RowKind,
-    api::{self, Card, Page, PlaylistPrivacy, Route, Section, Track},
+    api::{self, Card, CardKind, Page, PlaylistPrivacy, Route, Section, Track},
     settings,
 };
 
@@ -383,8 +383,10 @@ impl App {
                     let back = forget(&mut state.back, &mut state.forward, &route, &state.route);
                     (state.route == route, back)
                 };
-                if app.state.borrow().settings.pinned.contains(&id) {
-                    app.update_settings(|s| s.pinned.retain(|p| *p != id));
+                if (app.state.borrow().settings.pinned).has(CardKind::Playlist, &id) {
+                    app.update_settings(|s| {
+                        s.pinned.remove(CardKind::Playlist, &id);
+                    });
                 }
                 app.edit_library(|cards| cards.retain(|c| c.id != id));
                 if !shown {

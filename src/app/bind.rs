@@ -352,6 +352,12 @@ impl App {
                 .unwrap_or_default()
         });
         let weak = Rc::downgrade(self);
+        api.on_pin_label(move |kind, id| {
+            weak.upgrade()
+                .map(|app| app.pin_label(&kind, &id))
+                .unwrap_or_default()
+        });
+        let weak = Rc::downgrade(self);
         api.on_track_block_label(move |section, index| {
             weak.upgrade()
                 .map(|app| app.block_label(app.track_artist(section as usize, index as usize)))

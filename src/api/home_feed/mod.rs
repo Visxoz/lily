@@ -5,10 +5,7 @@ mod parse;
 
 use rustypipe::client::{ClientType, RustyPipeQuery};
 
-use super::{
-    Card, CardKind, CardLayout, QueueMode, Section, Track,
-    convert::{CARD_THUMB, resize_thumb},
-};
+use super::{Card, CardLayout, QueueMode, Section, Track};
 use parse::{Shelves, first_page, next_page};
 
 /// Continuations fetched at most after the first page; the whole feed is
@@ -312,20 +309,6 @@ pub fn arrange(sections: Vec<Section>) -> Vec<Section> {
 /// again, keeping its length, or makes the shelf of them when the feed has
 /// none. A song YouTube shows already stays where it is.
 pub fn add_recent<'a>(sections: &mut Vec<Section>, recent: impl Iterator<Item = &'a Track>) {
-    fn card(track: &Track) -> Card {
-        Card {
-            kind: CardKind::Song,
-            id: track.id.clone(),
-            title: track.title.clone(),
-            subtitle: track.artist_names(),
-            thumb: track
-                .thumb
-                .as_deref()
-                .map(|url| resize_thumb(url, CARD_THUMB)),
-            color: None,
-            track: Some(track.clone()),
-        }
-    }
     match sections.iter_mut().find(|s| s.title() == LISTEN_AGAIN) {
         Some(Section::Cards { cards, .. }) => {
             let len = cards.len();
@@ -333,7 +316,7 @@ pub fn add_recent<'a>(sections: &mut Vec<Section>, recent: impl Iterator<Item = 
             let slots = (RECENT_EVERY..len).step_by(RECENT_EVERY + 1).take(RECENT);
             let fresh: Vec<(usize, Card)> = slots
                 .zip(recent.filter(|t| !cards.iter().any(|c| c.id == t.id)))
-                .map(|(slot, track)| (slot, card(track)))
+                .map(|(slot, track)| (slot, Card::song(track)))
                 .collect();
             for (slot, card) in fresh {
                 cards.insert(slot, card);
@@ -342,7 +325,7 @@ pub fn add_recent<'a>(sections: &mut Vec<Section>, recent: impl Iterator<Item = 
         }
         Some(Section::Tracks { .. }) => {}
         None => {
-            let cards: Vec<Card> = recent.take(RECENT).map(card).collect();
+            let cards: Vec<Card> = recent.take(RECENT).map(Card::song).collect();
             if !cards.is_empty() {
                 sections.insert(
                     0,
@@ -360,6 +343,7 @@ pub fn add_recent<'a>(sections: &mut Vec<Section>, recent: impl Iterator<Item = 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::CardKind;
 
     /// A first page's token in YouTube's layout.
     fn feed_token(shelf: u8) -> String {

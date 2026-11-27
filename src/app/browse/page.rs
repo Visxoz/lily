@@ -5,10 +5,11 @@ use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 use crate::app::{
     App, State,
     browse::items::{bare_card, card_item, track_item, track_row},
+    library::pins::{PINNED, pinned_cards},
     opaque, s,
 };
 use crate::{
-    Api as ApiGlobal, CardItem, RowItem, RowKind, TrackItem,
+    Api as ApiGlobal, CardItem, RowItem, RowKind, Rows, TrackItem,
     api::{self, CardLayout, Header, Page, QueueMode, Route, Section, Track},
     downloads::Downloads,
     images,
@@ -224,6 +225,24 @@ impl Built {
             }
         }
     }
+
+    /// Library's Pinned row, kept out of the page so the cache never holds it.
+    fn pins(&mut self, state: &State, sections: &[Section]) {
+        let cards = pinned_cards(&state.settings.pinned, sections);
+        if cards.is_empty() {
+            return;
+        }
+        let pinned = Section::Cards {
+            title: "Pinned".to_owned(),
+            cards,
+            layout: CardLayout::Carousel,
+        };
+        let start = self.rows.len();
+        self.section(0, &pinned, &state.downloads);
+        for row in &mut self.rows[start..] {
+            row.section = PINNED;
+        }
+    }
 }
 
 impl App {
@@ -256,6 +275,9 @@ impl App {
 
         let header_edge = header_edge(page.header.as_ref());
         let state = self.state.borrow();
+        if route == Route::Library {
+            built.pins(&state, &page.sections);
+        }
         let downloads = &state.downloads;
         if let Some(header) = &page.header {
             let tracks = page.header_tracks();
@@ -324,6 +346,7 @@ impl App {
         }
         ui.set_page_scroll(restore.unwrap_or(0.0));
         *self.rows_route.borrow_mut() = Some(route.clone());
+        self.mark_pins();
         // A new model's first layout measures only its first row, the header,
         // and seeks by it; once real rows are measured, the same seek lands.
         if let Some(scroll) = restore.filter(|&s| !in_place && s != 0.0) {
@@ -399,6 +422,72 @@ impl App {
         self.load_header_art(thumb, edge, generation);
         self.load_art(card_art, track_art, generation);
         self.load_grids();
+        self.show_pins();
+    }
+
+    /// Shows Library's Pinned row as the pins now are, in place, so the rest
+    /// of the page keeps its rows and where it is scrolled.
+    pub(in crate::app) fn show_pins(self: &Rc<Self>) {
+        if self.rows_route.borrow().as_ref() != Some(&Route::Library) {
+            return;
+        }
+        let mut built = Built::new(&Route::Library);
+        let generation = {
+            let state = self.state.borrow();
+            built.pins(&state, &state.page.sections);
+            state.page_generation
+        };
+        let rows = self.rows();
+        let old = (0..rows.row_count())
+            .take_while(|&i| rows.row_data(i).is_some_and(|r| r.section == PINNED))
+            .count();
+        let new = built.rows.len();
+        if new == 0 {
+            // Taking the rows out could move the page by as much of them as
+            // shows, which Slint alone knows, so they empty and go the next
+            // time Library is shown.
+            for i in 0..old {
+                if let Some(row) = rows.row_data(i) {
+                    let cards = ModelRc::default();
+                    rows.set_row_data(i, RowItem { cards, ..row });
+                }
+            }
+            return;
+        }
+        if old == 0 {
+            // Slint's list keeps the rows on screen in place through rows
+            // added above them, but not before the first, so only while that
+            // shows does the page scroll by what is added; as none of
+            // Library's rows is shorter than that title, any other scroll is
+            // past it.
+            let ui = self.ui();
+            let scroll = ui.get_page_scroll();
+            let height = |row: RowItem| ui.global::<Rows>().invoke_height(row, 0.0);
+            let added: f32 = built.rows.iter().cloned().map(height).sum();
+            let first_shown = rows.row_data(0).is_some_and(|r| -scroll < height(r));
+            for (i, row) in built.rows.into_iter().enumerate() {
+                rows.insert(i, row);
+            }
+            if first_shown {
+                ui.set_page_scroll(scroll - added);
+            }
+            // Lazy grids say where they are by their row, which moved.
+            let moved = (self.grid_lines.take().into_iter())
+                .map(|(row, lines)| (row + new, lines))
+                .collect();
+            *self.grid_lines.borrow_mut() = moved;
+            self.load_grids();
+        } else {
+            // The same two rows, title and carousel, so nothing moves.
+            for (i, row) in built.rows.into_iter().enumerate() {
+                if i < old {
+                    rows.set_row_data(i, row);
+                } else {
+                    rows.insert(i, row);
+                }
+            }
+        }
+        self.load_art(built.card_art, Vec::new(), generation);
     }
 
     pub(in crate::app) fn find_row(&self, kind: RowKind) -> Option<usize> {
@@ -800,6 +889,7 @@ impl App {
         for row in lazy_rows {
             self.load_grid(row);
         }
+        self.mark_pins();
         self.header_changed();
         self.follow_more(route, generation, more);
     }

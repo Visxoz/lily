@@ -243,7 +243,7 @@ impl App {
                 .into_iter()
                 .map(|card| {
                     let item = CardItem {
-                        pinned: pinned.contains(&card.id),
+                        pinned: pinned.has(card.kind, &card.id),
                         ..card_item(card, images::ROW)
                     };
                     // Art the cache already held is in the item.
@@ -448,14 +448,13 @@ async fn renew(api: &Api) -> api::Result<()> {
     renewed
 }
 
-/// `cards` with the `pinned` ones first, in the order they were pinned, then
-/// the rest in theirs. A pinned ID not among them is passed over.
-fn pinned_first<'a>(cards: &'a [Card], pinned: &[String]) -> Vec<&'a Card> {
+/// `cards` with the pinned ones first, in the order they were pinned, then
+/// the rest in theirs. A pin not among them is passed over.
+fn pinned_first<'a>(cards: &'a [Card], pins: &settings::Pins) -> Vec<&'a Card> {
     let mut sorted: Vec<&Card> = cards.iter().collect();
     sorted.sort_by_cached_key(|card| {
-        pinned
-            .iter()
-            .position(|id| *id == card.id)
+        (pins.cards().iter())
+            .position(|p| p.kind == card.kind && p.id == card.id)
             .unwrap_or(usize::MAX)
     });
     sorted
@@ -468,19 +467,17 @@ mod tests {
 
     #[test]
     fn pinned_playlists_lead_in_the_order_pinned() {
-        let cards: Vec<Card> = ["a", "b", "c", "d"]
-            .map(|id| Card {
-                kind: CardKind::Playlist,
-                id: id.to_owned(),
-                title: String::new(),
-                subtitle: String::new(),
-                thumb: None,
-                color: None,
-                track: None,
-            })
-            .into();
-        let pinned = ["d", "gone", "b"].map(String::from);
-        let order: Vec<&str> = pinned_first(&cards, &pinned)
+        let cards = ["a", "b", "c", "d"].map(|id| Card::bare(CardKind::Playlist, id, ""));
+        let mut pins = settings::Pins::default();
+        for (kind, id) in [
+            (CardKind::Playlist, "d"),
+            (CardKind::Playlist, "gone"),
+            (CardKind::Album, "c"),
+            (CardKind::Playlist, "b"),
+        ] {
+            pins.add(Card::bare(kind, id, ""));
+        }
+        let order: Vec<&str> = pinned_first(&cards, &pins)
             .iter()
             .map(|c| c.id.as_str())
             .collect();
