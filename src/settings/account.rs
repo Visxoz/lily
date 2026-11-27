@@ -1,7 +1,11 @@
 //! What belongs to the account signed in when it was saved: the Home feed,
-//! the sidebar's playlists and the visitor ID, dropped on signing in or out.
+//! the sidebar's playlists, the visitor ID and when the sign-in was renewed,
+//! dropped on signing in or out.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 use super::{data_dir, read_json, save_json, write_atomic};
 
@@ -20,12 +24,38 @@ pub fn save_home(sections: &[crate::api::Section]) {
     save_json(&home_path(), &sections, "the home feed");
 }
 
-/// Drops the saved feed, sidebar and visitor ID, which belong to the account
-/// signed in when they were saved.
+/// Drops the saved feed, sidebar, visitor ID and renewal time, which belong
+/// to the account signed in when they were saved.
 pub fn remove_account_data() {
     let _ = std::fs::remove_file(home_path());
     let _ = std::fs::remove_file(library_path());
     let _ = std::fs::remove_file(visitor_path());
+    let _ = std::fs::remove_file(renewed_path());
+}
+
+/// Empty: its time is when the sign-in was last renewed.
+fn renewed_path() -> PathBuf {
+    data_dir().join("sign-in-renewed")
+}
+
+/// How long until the sign-in is due a renewal, `every` after the last one
+/// of any run.
+pub fn renewal_due(every: Duration) -> Duration {
+    let renewed = std::fs::metadata(renewed_path()).and_then(|m| m.modified());
+    due_after(renewed.ok(), SystemTime::now(), every)
+}
+
+fn due_after(renewed: Option<SystemTime>, now: SystemTime, every: Duration) -> Duration {
+    // One ahead of now was kept under a clock since put back, so says nothing.
+    renewed
+        .and_then(|at| now.duration_since(at).ok())
+        .map_or(Duration::ZERO, |since| every.saturating_sub(since))
+}
+
+pub fn save_renewal() {
+    if let Err(e) = write_atomic(&renewed_path(), &[]) {
+        log::warn!("could not save when the sign-in was renewed: {e}");
+    }
 }
 
 fn library_path() -> PathBuf {
@@ -85,6 +115,21 @@ mod tests {
         assert_eq!(usable("Cgt%3D", VISITOR_FOR), None);
         assert_eq!(usable("a\r\nb", minute), None, "not a header value");
         assert_eq!(usable("", minute), None);
+    }
+
+    #[test]
+    fn renews_an_interval_after_the_last() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let hour = Duration::from_secs(3_600);
+        let minutes = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(due_after(None, now, hour), Duration::ZERO, "never renewed");
+        assert_eq!(due_after(Some(now - minutes(10)), now, hour), minutes(50));
+        assert_eq!(due_after(Some(now - 2 * hour), now, hour), Duration::ZERO);
+        assert_eq!(
+            due_after(Some(now + 24 * hour), now, hour),
+            Duration::ZERO,
+            "kept under a clock since put back"
+        );
     }
 
     #[test]

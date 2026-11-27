@@ -9,8 +9,8 @@ mod searches;
 mod session;
 
 pub use account::{
-    load_home, load_library, load_visitor, remove_account_data, save_home, save_library,
-    save_visitor,
+    load_home, load_library, load_visitor, remove_account_data, renewal_due, save_home,
+    save_library, save_renewal, save_visitor,
 };
 pub use files::{
     HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, write_atomic,

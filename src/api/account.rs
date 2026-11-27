@@ -50,11 +50,11 @@ impl Api {
         self.rp.user_auth_cookie_header()
     }
 
-    /// Asks Google for fresh session cookies, as an open YouTube tab does
-    /// every few minutes: nothing else renews the app's own session.
+    /// Asks Google for fresh session cookies, as an open YouTube tab does:
+    /// nothing else renews the app's own session.
     pub async fn rotate_cookies(&self) -> Result<()> {
         let Some(cookie) = self.cookie() else {
-            return Ok(());
+            return Err("not signed in".into());
         };
         let response = crate::http::client()
             .post(ROTATE_URL)

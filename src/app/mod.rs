@@ -55,8 +55,6 @@ const TOAST_FOR: Duration = Duration::from_secs(5);
 /// After the first page has had the network.
 const AFTER_STARTUP: Duration = Duration::from_secs(10);
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
-/// As often as an open YouTube tab renews its session cookies.
-const ROTATE_COOKIES_EVERY: Duration = Duration::from_secs(10 * 60);
 
 pub struct App {
     ui: slint::Weak<AppWindow>,
@@ -406,7 +404,7 @@ impl App {
         Timer::single_shot(AFTER_STARTUP, move || {
             if let Some(app) = weak.upgrade() {
                 app.check_for_update();
-                app.rotate_cookies();
+                app.renew_sign_in_when_due();
             }
         });
         let weak = Rc::downgrade(self);
@@ -414,13 +412,6 @@ impl App {
             .start(TimerMode::Repeated, UPDATE_CHECK_EVERY, move || {
                 if let Some(app) = weak.upgrade() {
                     app.check_for_update();
-                }
-            });
-        let weak = Rc::downgrade(self);
-        self.cookie_timer
-            .start(TimerMode::Repeated, ROTATE_COOKIES_EVERY, move || {
-                if let Some(app) = weak.upgrade() {
-                    app.rotate_cookies();
                 }
             });
     }

@@ -11,7 +11,7 @@ use slint::{ComponentHandle, Image, Model, SharedString, Timer, TimerMode};
 use super::{App, browse::items::card_item, now_playing::lyrics::PassCheck};
 use crate::{
     Api as ApiGlobal, CardItem,
-    api::{Card, Route},
+    api::{self, Api, Card, Route},
     google_sign_in::{self, SignIn, Site},
     images, settings,
 };
@@ -19,6 +19,9 @@ use crate::{
 /// The least time between cookie checks, after one that didn't find the
 /// cookie rejected.
 const SIGN_IN_RECHECK_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Less often than an open YouTube tab, as a cookie found stale is renewed
+/// when YouTube answers signed out.
+const ROTATE_COOKIES_EVERY: Duration = Duration::from_secs(60 * 60);
 
 impl App {
     pub(super) fn sign_in(self: &Rc<Self>, cookie: String) {
@@ -290,9 +293,7 @@ impl App {
                 // check of a run can beat.
                 match api.cookie_valid().await {
                     Some(false) => {
-                        if let Err(e) = api.rotate_cookies().await {
-                            log::warn!("could not renew the sign-in: {e}");
-                        }
+                        let _ = renew(&api).await;
                         api.cookie_valid().await
                     }
                     valid => valid,
@@ -393,14 +394,37 @@ impl App {
         });
     }
 
-    /// Keeps the session from going stale or being revoked.
-    pub(super) fn rotate_cookies(&self) {
+    /// Keeps the session from going stale or being revoked, renewing it once
+    /// `ROTATE_COOKIES_EVERY` has passed since it last was, in any run, as
+    /// RotateCookies answers renewals close together with 429s.
+    pub(super) fn renew_sign_in_when_due(self: &Rc<Self>) {
+        if !self.state.borrow().signed_in {
+            return self.renew_sign_in_after(ROTATE_COOKIES_EVERY);
+        }
         let api = self.api.clone();
-        self.rt.spawn(async move {
-            if let Err(e) = api.rotate_cookies().await {
-                log::warn!("could not renew the sign-in: {e}");
-            }
-        });
+        self.spawn(
+            async move {
+                let due = settings::renewal_due(ROTATE_COOKIES_EVERY);
+                if !due.is_zero() {
+                    return Some(due);
+                }
+                // A failure waits the whole interval too, so the timer never spins.
+                let _ = renew(&api).await;
+                Some(ROTATE_COOKIES_EVERY)
+            },
+            // `None` only should the work panic.
+            |app, after| app.renew_sign_in_after(after.unwrap_or(ROTATE_COOKIES_EVERY)),
+        );
+    }
+
+    fn renew_sign_in_after(self: &Rc<Self>, after: Duration) {
+        let weak = Rc::downgrade(self);
+        self.cookie_timer
+            .start(TimerMode::SingleShot, after, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.renew_sign_in_when_due();
+                }
+            });
     }
 
     pub(super) fn sign_out(self: &Rc<Self>) {
@@ -412,6 +436,16 @@ impl App {
             app.show_fresh(Route::Home);
         });
     }
+}
+
+/// Keeps the time only of a renewal Google took, for the next to wait on.
+async fn renew(api: &Api) -> api::Result<()> {
+    let renewed = api.rotate_cookies().await;
+    match &renewed {
+        Ok(()) => settings::save_renewal(),
+        Err(e) => log::warn!("could not renew the sign-in: {e}"),
+    }
+    renewed
 }
 
 /// `cards` with the `pinned` ones first, in the order they were pinned, then
