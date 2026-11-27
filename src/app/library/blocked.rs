@@ -110,7 +110,8 @@ impl App {
             return;
         }
         self.skip_past(&id);
-        // Its entry, skipped past; a no-op when stopped on it, as the current one stays.
+        // Its entry, skipped past; stopped on it, `prefetch_next` takes it out
+        // once the skip carries on.
         let row = self.state.borrow().queue.find_uid(uid);
         self.queue_remove(row.into_iter().collect());
     }

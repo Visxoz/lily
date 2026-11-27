@@ -12,10 +12,7 @@ use std::{
     collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use url::Url;
@@ -200,7 +197,6 @@ impl Motion {
     /// Streamed to a file of its own and renamed in, so the clip is never
     /// held in memory and one cut short is never kept.
     async fn download(&self, url: &Url, path: &Path) -> Result<(), String> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         if !crate::http::motion_allowed(url) {
             return Err("refused a clip from an unexpected host".to_owned());
         }
@@ -212,7 +208,7 @@ impl Motion {
             .map_err(|e| format!("could not download a clip: {}", e.without_url()))?;
         let keep_failed = |e: std::io::Error| format!("could not keep a clip: {e}");
         std::fs::create_dir_all(&self.dir).map_err(keep_failed)?;
-        let partial = path.with_extension(format!("{}.part", NEXT.fetch_add(1, Ordering::Relaxed)));
+        let partial = crate::settings::partial(path, "part");
         let mut file = std::fs::File::create(&partial).map_err(keep_failed)?;
         let written = crate::http::each_chunk(response, CLIP_LIMIT, |chunk| {
             file.write_all(chunk).map_err(|e| e.to_string())

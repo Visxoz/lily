@@ -49,6 +49,8 @@ impl App {
                         }
                         // It may be another account's.
                         settings::remove_account_data();
+                        // Fresh, so a restart within the hour renews them no sooner.
+                        settings::save_renewal();
                         app.load_library();
                         app.load_account_photo();
                         app.premium.reset();

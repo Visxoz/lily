@@ -63,8 +63,7 @@ pub fn write_atomic_parts(
     path: &Path,
     write: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<()> {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let partial = path.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
+    let partial = partial(path, "tmp");
     // The file is closed by then, as Windows renames no open file.
     let result = File::create(&partial)
         .and_then(|mut file| write(&mut file))
@@ -73,6 +72,13 @@ pub fn write_atomic_parts(
         let _ = std::fs::remove_file(&partial);
     }
     result
+}
+
+/// A temporary file beside `path`, its own for each write.
+pub fn partial(path: &Path, extension: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("{n}.{extension}"))
 }
 
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {

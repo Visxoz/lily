@@ -179,13 +179,16 @@ impl App {
                 queue, playback, ..
             } = &mut *state;
             let id = queue.current().map(|t| t.id.clone());
-            // One that would not play is never played again from memory.
-            if let Some(id) = &id {
-                AudioCache::default().failed_to_play(id);
-            }
-            // The playing stream may be the last song's, should this one not have resolved.
+            // One that would not play is never played again from memory. The
+            // playing stream may be the last song's, should this one not have resolved.
             let kept = playback.playing.take().is_some_and(|(playing, stream, _)| {
-                Some(playing) == id && stream.file.is_some_and(|f| AudioCache::default().owns(&f))
+                if id.as_ref() != Some(&playing) {
+                    return false;
+                }
+                // Played from memory or kept as it streamed, the copy is refused.
+                let cache = AudioCache::default();
+                cache.failed_to_play(&playing);
+                stream.file.is_some_and(|f| cache.owns(&f))
             });
             // A retry that fails before it sounds still carries the play.
             let recorded = playback.play_recorded == Some(playback.generation);
@@ -290,7 +293,15 @@ impl App {
             // A stream that dropped is kept, so its track rides out the
             // drop as it plays rather than failing to resolve offline.
             "next-failed" if message != "dropped" => {
-                self.state.borrow_mut().playback.queued_failed = true;
+                let playback = &mut self.state.borrow_mut().playback;
+                playback.queued_failed = true;
+                // A kept copy that would not open is refused before it is current.
+                let cache = AudioCache::default();
+                if let Some((id, stream, _)) = &playback.queued
+                    && stream.file.as_ref().is_some_and(|f| cache.owns(f))
+                {
+                    cache.failed_to_play(id);
+                }
             }
             "ended" => {
                 self.state.borrow_mut().playback.failures = 0;
@@ -325,10 +336,17 @@ impl App {
         let skipped = {
             let state = &mut *self.state.borrow_mut();
             let due = state.playback.skip_due();
-            state.queue.current().filter(|_| due).map(|t| t.id.clone())
+            let blocked = &state.settings.blocked_artists;
+            (state.queue.current().filter(|_| due)).map(|t| {
+                let uid = state.queue.current_uid().filter(|_| blocked.has(t));
+                (t.id.clone(), uid)
+            })
         };
-        if let Some(id) = skipped {
+        if let Some((id, blocked_uid)) = skipped {
             self.skip_past(&id);
+            // A blocked artist's entry goes, as when skipped at once.
+            let row = blocked_uid.and_then(|uid| self.state.borrow().queue.find_uid(uid));
+            self.queue_remove(row.into_iter().collect());
             return;
         }
         // Smart Shuffle places its recommendations first, as the next track
@@ -470,6 +488,8 @@ impl App {
                     }
                     Err(e) => log::warn!("autoplay radio failed: {e}"),
                 }
+                // A skip that waited on it and was not taken would fire later.
+                app.state.borrow_mut().playback.skip_waits = None;
             },
         );
     }

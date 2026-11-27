@@ -68,7 +68,8 @@ pub struct Saved {
 
 impl Saved {
     /// Moves `track`'s stream from the audio cache should it hold that very
-    /// file, else downloads it, then its cover, and leaves the cache. Blocking.
+    /// file, else downloads it, saves its cover, then drops the cache's copy.
+    /// Blocking.
     pub fn fetch(
         track: Track,
         stream: ResolvedStream,
@@ -80,6 +81,8 @@ impl Saved {
         }
         let saving = |e: std::io::Error| format!("couldn't save it: {e}");
         std::fs::create_dir_all(dir()).map_err(saving)?;
+        // First, so the audio lands just before the index can hold it.
+        let cover = track.large_thumb().and_then(|url| fetch_cover(&url));
         let cache = AudioCache::default();
         let audio = audio_path(&track.id, &stream.mime);
         let moved = cache.holding(&track.id, &stream).is_some_and(|from| {
@@ -95,14 +98,11 @@ impl Saved {
             settings::write_atomic_parts(&audio, write).map_err(saving)?;
         }
         // Without its cover it still plays, with the cover online.
-        let cover = track
-            .large_thumb()
-            .and_then(|url| fetch_cover(&url))
-            .is_some_and(|cover| {
-                settings::write_atomic(&cover_path(&track.id), cover.as_ref())
-                    .map_err(|e| log::warn!("could not save a cover: {e}"))
-                    .is_ok()
-            });
+        let cover = cover.is_some_and(|cover| {
+            settings::write_atomic(&cover_path(&track.id), cover.as_ref())
+                .map_err(|e| log::warn!("could not save a cover: {e}"))
+                .is_ok()
+        });
         // Not on disk twice.
         cache.remove(&track.id);
         Ok(Self {

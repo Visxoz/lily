@@ -117,7 +117,7 @@ pub async fn load_player(id: String) -> Result<Player, String> {
         trimmed.as_millis()
     ));
     if let Ok(json) = serde_json::to_vec(&player) {
-        tokio::task::spawn_blocking(move || std::fs::write(cache_path(), json));
+        tokio::task::spawn_blocking(move || crate::settings::write_atomic(&cache_path(), &json));
     }
     Ok(player)
 }

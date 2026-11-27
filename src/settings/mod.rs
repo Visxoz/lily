@@ -16,8 +16,8 @@ pub use account::{
 };
 pub use blocked::Blocked;
 pub use files::{
-    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, touch,
-    write_atomic, write_atomic_parts,
+    HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, partial, prune, remove_old_cookie,
+    touch, write_atomic, write_atomic_parts,
 };
 pub(crate) use files::{read_json, save_json};
 pub use history::History;

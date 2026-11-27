@@ -211,23 +211,13 @@ impl AudioCache {
         self.prune_to(budget());
     }
 
-    /// Each song's sidecar goes first, so it is never found without its file.
     fn prune_to(&self, budget: u64) {
         let remove = |song: &Path| {
-            if audio::in_use(song) {
-                return false;
-            }
-            let _ = std::fs::remove_file(song.with_extension("json"));
-            std::fs::remove_file(song).is_ok()
+            let id = song.file_stem().and_then(|id| id.to_str());
+            !audio::in_use(song) && id.is_some_and(|id| self.remove(id))
         };
         let songs = |path: &Path| path.extension().is_some_and(|x| x == "audio");
         settings::prune(&self.dir, budget, None, remove, songs);
-    }
-
-    /// Run at startup: deletes what a crash left. Blocking.
-    pub fn sweep(&self) {
-        let _tidying = tidying();
-        self.drop_leftovers();
     }
 
     /// Every song but those playing or queued, and any still being written.
@@ -237,9 +227,10 @@ impl AudioCache {
         self.prune_to(0);
     }
 
-    /// Temporary files, and songs or sidecars without the other, unless their
-    /// song is in use.
-    fn drop_leftovers(&self) {
+    /// Run at startup: deletes what a crash left, temporary files and songs or
+    /// sidecars without the other, unless their song is in use. Blocking.
+    pub fn sweep(&self) {
+        let _tidying = tidying();
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
@@ -282,12 +273,13 @@ impl AudioCache {
     }
 
     /// Deletes `id`'s song, its sidecar first so it is never found without
-    /// its file. Blocking.
-    pub fn remove(&self, id: &str) {
-        if let Some((audio, sidecar)) = self.paths(id) {
-            let _ = std::fs::remove_file(sidecar);
-            let _ = std::fs::remove_file(audio);
-        }
+    /// its file; returns whether the song went. Blocking.
+    pub fn remove(&self, id: &str) -> bool {
+        let Some((audio, sidecar)) = self.paths(id) else {
+            return false;
+        };
+        let _ = std::fs::remove_file(sidecar);
+        std::fs::remove_file(audio).is_ok()
     }
 }
 

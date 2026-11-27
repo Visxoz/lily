@@ -316,14 +316,13 @@ impl App {
         video_id: String,
         prefetched: Option<ResolvedStream>,
     ) -> impl Future<Output = Result<ResolvedStream, String>> + Send + 'static {
-        // Only `offline_stream` vouches for a download or local file, which
-        // may since have gone; a kept one gone fails over to the network.
+        // Only `offline_stream` and `find` vouch for a file, which may since
+        // have gone.
         let offline = self.offline_stream(&video_id);
-        let cache = AudioCache::default();
-        let prefetched = prefetched.filter(|s| s.file.as_ref().is_none_or(|f| cache.owns(f)));
+        let prefetched = prefetched.filter(|s| s.file.is_none());
         let held = prefetched
             .as_ref()
-            .is_some_and(|s| s.file.is_some() || self.player.holds(&s.url));
+            .is_some_and(|s| self.player.holds(&s.url));
         let quality = self.state.borrow().settings.quality;
         let resolver = self.resolver(video_id);
         let want_premium = resolver.want_premium;
@@ -340,7 +339,9 @@ impl App {
             };
             let id = resolver.video_id.clone();
             // Off Tokio's workers, as a sleeping disk can take a while.
-            let kept = tokio::task::spawn_blocking(move || cache.find(&id, quality, premium_copy));
+            let kept = tokio::task::spawn_blocking(move || {
+                AudioCache::default().find(&id, quality, premium_copy)
+            });
             if let Ok(Some(stream)) = kept.await {
                 return Ok(stream);
             }

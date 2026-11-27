@@ -103,6 +103,8 @@ impl App {
                         app.extend_with_radio_if_ending();
                     }
                 }
+                // A skip that waited on it and was not taken would fire later.
+                app.state.borrow_mut().playback.skip_waits = None;
             },
         );
     }

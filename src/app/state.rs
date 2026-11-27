@@ -35,8 +35,8 @@ pub(super) struct Playback {
     /// Bumped as a radio on its way to carry the queue on is dropped, so its
     /// answer is too, without touching a playlist's rest.
     pub(super) radio_generation: u64,
-    /// Autoplay's radio seed and its entries' uids once landed, dropped with
-    /// them should the seed be disliked or blocked before playback reaches them.
+    /// Autoplay's radio seed and its entries' uids once landed, dropped with them
+    /// should the seed be disliked or blocked before any entry from the radio's first uid on plays.
     pub(super) autoplayed: Option<(String, Option<Range<u64>>)>,
     /// The generation stopped on a song skipped past while a radio was on
     /// its way, so that radio carries on from it as it lands.
