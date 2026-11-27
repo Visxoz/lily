@@ -37,16 +37,14 @@ pub(in crate::api) struct Found {
     /// Apple Music's lyrics and those like them.
     pub apple: Vec<Lyrics>,
     pub others: Vec<Lyrics>,
-    /// Asked already, by the hub or for lrc.red by `other_sites`, with lyrics
-    /// or without, so not to be asked again.
+    // Each site's answer is in, lyrics or none, so it isn't asked again;
+    // `other_sites` keeps lrc.red's only where searched as lrc.red would.
     pub asked_lrc_red: bool,
     pub asked_lrclib: bool,
 }
 
-/// `None` without a pass, which is then checked for the songs after, or when
-/// the hub fails. Events are read as they arrive, until nothing still to come
-/// could be chosen over what has, so a slow site or a stall keeps what came
-/// before it.
+/// `None` without a pass, then checked for later songs, or when the hub fails.
+/// Read as events arrive until `Answer::settled`, so a stall keeps what came.
 pub(super) async fn lyrics(track: &Track) -> Option<Found> {
     let jwt = current()?;
     let artist = track.artist_names();
@@ -104,9 +102,8 @@ struct Answer {
 }
 
 impl Answer {
-    /// Word timing from a site every one ranked above answered without, which
-    /// `chosen` prefers in this order. Unchecked yet, so one that disagrees
-    /// costs the later sites.
+    /// Word timing came from a site every one ranked above answered without.
+    /// Unchecked yet, so timing that disagrees costs the sites after it.
     fn settled(&self) -> bool {
         for (slot, &heard) in self.slots.iter().zip(&self.heard) {
             if !heard {
@@ -426,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn settles_once_nothing_to_come_could_be_chosen() {
+    fn settles_on_word_timing_once_every_site_above_has_answered() {
         assert!(formats::ttml(WORD_TIMED, "").is_some_and(|l| l.is_word_synced()));
         let (mut answer, mut buffer) = (Answer::default(), Vec::new());
         let events = [
@@ -480,7 +477,7 @@ mod tests {
                 &mut buffer,
                 event(provider, serde_json::json!({})).as_bytes(),
             );
-            assert!(!answer.settled(), "binimum may still come");
+            assert!(!answer.settled(), "a site ranked above QQ may still come");
         }
         let binimum = serde_json::json!({ "lyrics": LINE_TIMED });
         answer.feed(&mut buffer, event("binimum", binimum).as_bytes());

@@ -142,25 +142,24 @@ pub(super) async fn find(
 /// lrc.red can take three requests in turn.
 const LRC_RED_WITHIN: Duration = Duration::from_secs(6);
 
-/// The hub's lyrics, and lrc.red's when the hub has no Apple Music word
-/// timing and lrc.red's answer may differ from the hub's; both run alongside
-/// YouTube's.
+/// The hub's lyrics, and lrc.red's where the hub lacks Apple Music word timing;
+/// both run alongside YouTube's.
 async fn other_sites(track: &Track) -> hub::Found {
     let mut found = hub::lyrics(track).await.unwrap_or_default();
-    if found.apple.iter().any(Lyrics::is_word_synced) || hub_answered_for_lrc_red(&found, track) {
-        return found;
+    if asks_lrc_red_now(&mut found, track) {
+        found
+            .apple
+            .extend(within(true, LRC_RED_WITHIN, sites::lrc_red(track)).await);
+        found.asked_lrc_red = true;
     }
-    found
-        .apple
-        .extend(within(true, LRC_RED_WITHIN, sites::lrc_red(track)).await);
-    found.asked_lrc_red = true;
     found
 }
 
-/// The hub's binimum is lrc.red, so its answer, lyrics or none, is lrc.red's,
-/// unless lrc.red would be asked under other names than the hub was.
-fn hub_answered_for_lrc_red(found: &hub::Found, track: &Track) -> bool {
-    found.asked_lrc_red && sites::lrc_red_searches_as_given(track)
+/// Keeps `asked_lrc_red` only where binimum, lrc.red, searched as lrc.red
+/// would; asks it now only without Apple Music word timing.
+fn asks_lrc_red_now(found: &mut hub::Found, track: &Track) -> bool {
+    found.asked_lrc_red = found.asked_lrc_red && sites::lrc_red_searches_as_given(track);
+    !found.asked_lrc_red && !found.apple.iter().any(Lyrics::is_word_synced)
 }
 
 async fn within<T>(
@@ -182,10 +181,8 @@ fn checked(other: &Lyrics, own: Option<&matching::Reference>) -> bool {
         && own.is_none_or(|own| own.agrees(other))
 }
 
-/// Word timing, Apple Music's kind first; then timed lines, Apple Music's
-/// kind, YouTube's, then the others'; then YouTube's text, or any. The other
-/// sites' have passed `checked`, and come best first. `hub::Answer::settled`
-/// stops reading the hub by this ranking.
+/// Word timing, Apple Music's kind first; then timed lines, Apple Music's kind,
+/// YouTube's, the others'; then YouTube's text, or any. Sites' come checked.
 fn chosen(own: Option<Lyrics>, apple: Vec<Lyrics>, others: Vec<Lyrics>) -> Option<Lyrics> {
     let split = apple.len();
     let mut sites = apple;
@@ -384,48 +381,58 @@ mod tests {
     }
 
     #[test]
-    fn lrc_red_is_asked_only_where_the_hubs_answer_is_not_its_own() {
-        let track = |title: &str, artist: &str| Track {
+    fn hubs_binimum_counts_as_lrc_red_only_where_searched_alike() {
+        let track = |title: &str, artists: &[&str]| Track {
             title: title.into(),
-            artists: vec![crate::api::ArtistRef {
-                id: None,
-                name: artist.into(),
-            }],
-            duration: Some(200),
+            artists: artists
+                .iter()
+                .map(|&name| crate::api::ArtistRef {
+                    id: None,
+                    name: name.into(),
+                })
+                .collect(),
             ..Track::default()
         };
-        let plain = track("Alpha", "Beta");
-        let missed = hub::Found {
+        let heard = || hub::Found {
             asked_lrc_red: true,
             ..hub::Found::default()
         };
-        assert!(hub_answered_for_lrc_red(&missed, &plain));
-        assert!(
-            !hub_answered_for_lrc_red(&hub::Found::default(), &plain),
+        let ask = |mut found: hub::Found, track: &Track| {
+            let now = asks_lrc_red_now(&mut found, track);
+            (now, found.asked_lrc_red)
+        };
+        let plain = track("Alpha", &["Beta"]);
+        assert_eq!(ask(heard(), &plain), (false, true));
+        assert_eq!(
+            ask(hub::Found::default(), &plain),
+            (true, false),
             "lrc.red never answered"
         );
-        let lines = hub::Found {
-            apple: vec![lyrics(&[1.0, 3.0], false, sites::LRC_RED)],
-            asked_lrc_red: true,
-            ..hub::Found::default()
-        };
-        assert!(
-            hub_answered_for_lrc_red(&lines, &plain),
-            "the same search finds the same lyrics"
-        );
-        for (title, artist, why) in [
-            ("Alpha (feat. Gamma)", "Beta", "searched without the credit"),
-            ("晴天", "周杰倫", "searched again in Simplified"),
-            ("Alpha", "Beta - Topic", "searched without \" - Topic\""),
+        for (title, artists, why) in [
+            (
+                "Alpha (feat. Gamma)",
+                &["Beta"][..],
+                "searched without the credit",
+            ),
+            ("Alpha", &["Beta", "Gamma"], "searched by the first artist"),
+            ("晴天", &["周杰倫"], "searched again in Simplified"),
+            ("Alpha", &["Beta - Topic"], "searched without \" - Topic\""),
         ] {
-            assert!(
-                !hub_answered_for_lrc_red(&missed, &track(title, artist)),
-                "{why}"
-            );
+            assert_eq!(ask(heard(), &track(title, artists)), (true, false), "{why}");
         }
-        assert!(
-            hub_answered_for_lrc_red(&missed, &track("ハレ晴レ", "周杰倫")),
+        assert_eq!(
+            ask(heard(), &track("ハレ晴レ", &["周杰倫"])),
+            (false, true),
             "kana, so not simplified"
+        );
+        // Word timing YouTube's may yet reject leaves lrc.red to `find`.
+        let words = hub::Found {
+            apple: vec![lyrics(&[1.0, 3.0], true, "Source: Better Lyrics")],
+            ..heard()
+        };
+        assert_eq!(
+            ask(words, &track("Alpha", &["Beta", "Gamma"])),
+            (false, false)
         );
     }
 }

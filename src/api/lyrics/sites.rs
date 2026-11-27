@@ -138,9 +138,8 @@ pub(super) fn lrc_red_searches_as_given(track: &Track) -> bool {
     title == track.title && artist == track.artist_names() && simplified(&title, &artist).is_none()
 }
 
-/// The names in Simplified characters, which Chinese songs are filed under,
-/// should that change them. Kana mark Japanese, whose kanji aren't Chinese to
-/// simplify.
+/// The names in Simplified, as Chinese songs are filed, should that change
+/// them; never with kana, as Japanese kanji aren't Chinese to simplify.
 fn simplified<'a>(title: &'a str, artist: &'a str) -> Option<(Cow<'a, str>, Cow<'a, str>)> {
     let kana = |text: &str| text.chars().any(|c| ('\u{3040}'..'\u{3100}').contains(&c));
     if kana(title) || kana(artist) {
