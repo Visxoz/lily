@@ -2,7 +2,7 @@
 //! Library's Pinned row, the mark on its other cards, and the sidebar's
 //! pinned playlists. Pins are kept on this PC only.
 
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use slint::{Model, ModelRc, SharedString};
 
@@ -24,18 +24,23 @@ pub(in crate::app) fn shown_cards(state: &State) -> impl Iterator<Item = &Card> 
         .chain(state.settings.pinned.cards())
 }
 
+/// A card by kind and ID: on the page, pinned, or in the sidebar.
+pub(in crate::app) fn find_card<'a>(
+    state: &'a State,
+    kind: CardKind,
+    id: &str,
+) -> Option<&'a Card> {
+    (shown_cards(state).chain(&state.library)).find(|c| c.kind == kind && c.id == id)
+}
+
 /// Library's Pinned row, first pinned first, with Library's own card where it
 /// lists one; an older version's untitled pin shows only there.
 pub(in crate::app) fn pinned_cards(pins: &Pins, sections: &[Section]) -> Vec<Card> {
-    let listed: HashMap<&str, &Card> = (sections.iter())
-        .flat_map(Section::cards)
-        .filter(|c| pins.has(c.kind, &c.id))
-        .map(|c| (c.id.as_str(), c))
-        .collect();
     (pins.cards().iter())
-        .filter_map(|pin| match listed.get(pin.id.as_str()) {
-            Some(card) if card.kind == pin.kind => Some(*card),
-            _ => (!pin.title.is_empty()).then_some(pin),
+        .filter_map(|pin| {
+            (sections.iter().flat_map(Section::cards))
+                .find(|c| c.kind == pin.kind && c.id == pin.id)
+                .or((!pin.title.is_empty()).then_some(pin))
         })
         .cloned()
         .collect()
@@ -74,9 +79,7 @@ impl App {
             CardKind::Song => find_song(&state, id)
                 .filter(|t| !t.is_local())
                 .map(Card::song),
-            kind => (shown_cards(&state).chain(&state.library))
-                .find(|c| c.kind == kind && c.id == id)
-                .cloned(),
+            kind => find_card(&state, kind, id).cloned(),
         }
     }
 
@@ -84,6 +87,9 @@ impl App {
     /// Library, where pins show, is then only a sign-in prompt.
     pub(in crate::app) fn pin_label(&self, kind: &str, id: &str) -> SharedString {
         let state = self.state.borrow();
+        if !state.signed_in {
+            return SharedString::new();
+        }
         // Without `card_of`'s look for an artist's picture.
         let header = (kind == "header")
             .then(|| self.header_card(&state))
@@ -95,9 +101,7 @@ impl App {
         let Some((kind, id)) = target else {
             return SharedString::new();
         };
-        if !state.signed_in {
-            SharedString::new()
-        } else if state.settings.pinned.has(kind, id) {
+        if state.settings.pinned.has(kind, id) {
             "Unpin from library".into()
         } else {
             "Pin to library".into()
@@ -195,6 +199,7 @@ mod tests {
         let pins: Pins = [
             Card::bare(CardKind::Song, "v", "Song"),
             Card::bare(CardKind::Album, "b", "Pinned b"),
+            Card::bare(CardKind::Playlist, "b", "Pinned playlist b"),
             Card::bare(CardKind::Playlist, "a", "Old name"),
             Card::bare(CardKind::Playlist, "gone", ""),
             Card::bare(CardKind::Artist, "UC1", "Not in Library"),
@@ -206,8 +211,8 @@ mod tests {
             .collect();
         assert_eq!(
             titles,
-            ["Song", "Album b", "Listed a", "Not in Library"],
-            "Library's own card where it lists one, of the same kind"
+            ["Song", "Album b", "Listed b", "Listed a", "Not in Library"],
+            "Library's own card where it lists one, of the same kind, though IDs repeat across kinds"
         );
         let untitled: Pins = [Card::bare(CardKind::Playlist, "gone", "")]
             .into_iter()

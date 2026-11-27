@@ -27,20 +27,24 @@ pub(in crate::app) fn find_song<'a>(state: &'a State, id: &str) -> Option<&'a Tr
         .or_else(cards)
 }
 
+fn row_track(state: &State, section: usize, index: usize) -> Option<&Track> {
+    match state.page.sections.get(section)? {
+        Section::Tracks { tracks, .. } => tracks.get(index),
+        Section::Cards { .. } => None,
+    }
+}
+
 impl App {
     fn section_track(&self, section: usize, index: usize) -> Option<Track> {
-        match self.state.borrow().page.sections.get(section)? {
-            Section::Tracks { tracks, .. } => tracks.get(index).cloned(),
-            Section::Cards { .. } => None,
-        }
+        row_track(&self.state.borrow(), section, index).cloned()
     }
 
     /// The artist a song row's "block" acts on.
     pub(in crate::app) fn track_artist(&self, section: usize, index: usize) -> Option<ArtistRef> {
-        self.section_track(section, index)?
+        row_track(&self.state.borrow(), section, index)?
             .artists
-            .into_iter()
-            .next()
+            .first()
+            .cloned()
     }
 
     pub(in crate::app) fn play_from_section(self: &Rc<Self>, section: usize, index: usize) {
@@ -369,17 +373,15 @@ impl App {
             let state = self.state.borrow();
             tracks.iter().all(|t| state.settings.blocked_artists.has(t))
         };
-        let before = self.state.borrow().queue_generation;
         if !waits {
             self.play_card_tracks(tracks, radio);
         }
-        // Read once the queue is set, so it is this queue's; unchanged, nothing
-        // played and the queue isn't this page's.
+        // Read once the queue is set, so it is this queue's.
         let (queue_generation, account) = {
             let state = self.state.borrow();
             (state.queue_generation, state.account)
         };
-        if !more || shown == 0 || (!waits && queue_generation == before) {
+        if !more || shown == 0 {
             return;
         }
         let api = self.api.clone();
@@ -400,10 +402,11 @@ impl App {
                 };
                 if waits {
                     // Every song blocked, it says so only once the whole list is in.
-                    let state = app.state.borrow();
-                    let all = tracks.iter().all(|t| state.settings.blocked_artists.has(t));
-                    drop(state);
-                    if !whole && all {
+                    let gave_up = !whole && {
+                        let state = app.state.borrow();
+                        tracks.iter().all(|t| state.settings.blocked_artists.has(t))
+                    };
+                    if gave_up {
                         app.toast("Couldn't load the rest of this playlist");
                         return;
                     }
@@ -502,7 +505,7 @@ impl App {
             }
             "copy-link" if !track.is_local() => self.copy_link(api::link("song", &track.id)),
             "remove-from-playlist" => self.remove_from_playlist(section, track),
-            "block" => self.toggle_block(self.track_artist(section, index)),
+            "block" => self.toggle_block(track.artists.into_iter().next()),
             _ => {}
         }
     }

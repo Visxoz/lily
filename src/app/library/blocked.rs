@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use slint::{ModelRc, SharedString, VecModel};
 
-use super::pins::shown_cards;
+use super::pins::find_card;
 use crate::api::{ArtistRef, CardKind};
 use crate::app::{App, browse::actions::find_song};
 use crate::settings::Blocked;
@@ -23,12 +23,10 @@ impl App {
                     name: h.title.clone(),
                 })
             }),
-            "artist" => shown_cards(&state)
-                .find(|c| c.kind == CardKind::Artist && c.id == id)
-                .map(|c| ArtistRef {
-                    id: Some(c.id.clone()),
-                    name: c.title.clone(),
-                }),
+            "artist" => find_card(&state, CardKind::Artist, id).map(|c| ArtistRef {
+                id: Some(c.id.clone()),
+                name: c.title.clone(),
+            }),
             "song" => find_song(&state, id).and_then(|t| t.artists.first().cloned()),
             _ => None,
         }
@@ -86,8 +84,7 @@ impl App {
     }
 
     /// Takes the artist just blocked out of the queue and skips their song
-    /// playing; one paused stays, as skipping would play it. Only this one,
-    /// so a song chosen by an artist blocked before stays.
+    /// playing, but not one paused, which a skip would play. Only this artist.
     fn leave_out_blocked(self: &Rc<Self>, artist: ArtistRef) {
         let blocked: Blocked = [artist].into_iter().collect();
         let (rows, playing) = {
@@ -107,15 +104,13 @@ impl App {
         // First, so the skip lands on a song kept.
         self.queue_remove(rows);
         let Some((id, uid)) = playing else { return };
-        // Paused too, so the radio autoplay queued from it doesn't follow it; should
-        // Play then take it to its end, autoplay asks afresh, and leaves the
-        // artist out, as on iOS.
-        self.drop_autoplay_radio(&id);
         if self.player.is_paused() || self.stopped() {
+            // So its autoplay radio doesn't follow it; a later one leaves the artist out.
+            self.drop_autoplay_radio(&id);
             return;
         }
         self.skip_past(&id);
-        // Its entry, spared while it played; still playing, as stopped on, it stays.
+        // Its entry, skipped past; a no-op when stopped on it, as the current one stays.
         let row = self.state.borrow().queue.find_uid(uid);
         self.queue_remove(row.into_iter().collect());
     }
