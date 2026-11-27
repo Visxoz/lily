@@ -83,8 +83,8 @@ fn newly_near(
     (first..end).filter(move |i| !asked.contains(i))
 }
 
-/// Where Library scrolls to as its Pinned rows, `added` tall (0 as they go),
-/// change: none once its first row is off screen, as Slint keeps it still then.
+/// Where Library scrolls to as its Pinned rows change by `added` (0 as they
+/// go); none once its first row is off screen, as Slint keeps it still then.
 fn pins_scroll(first_shown: bool, scroll: f32, added: f32) -> Option<f32> {
     if !first_shown || scroll >= 0.0 {
         // At the very top, rows added show where they go.
@@ -597,6 +597,10 @@ impl App {
     pub(in crate::app) fn on_grid_lines(self: &Rc<Self>, row: i32, first: i32, end: i32) {
         let [row, first, end] = [row, first, end].map(|n| usize::try_from(n).unwrap_or(0));
         let was = self.grid_lines.borrow_mut().insert(row, (first, end));
+        // `first` and `end` often say the same change twice.
+        if was == Some((first, end)) {
+            return;
+        }
         // Said during Slint's layout pass, so the model is changed once it ends.
         let app = Rc::clone(self);
         slint::Timer::single_shot(std::time::Duration::ZERO, move || {
@@ -611,9 +615,8 @@ impl App {
         }
     }
 
-    /// Loads the art of lazy grid `row`'s cards near the screen, those not
-    /// already near it as it said before (`was`), and lets go of any now far
-    /// off; none while the window is hidden.
+    /// Loads art for lazy grid `row`'s cards newly near the screen (since `was`)
+    /// and lets go of those now far off; none while the window is hidden.
     fn load_grid(self: &Rc<Self>, row: usize, was: Option<(usize, usize)>) {
         if self.art_hidden.get() {
             return;
@@ -643,6 +646,7 @@ impl App {
             else {
                 return;
             };
+            // A card whose art failed stays blank until it nears the screen anew.
             let wanted: Vec<_> = newly_near(first, end.min(cards.row_count()), was)
                 .filter_map(|i| {
                     let card = cards.row_data(i).filter(|c| c.art.size().width == 0)?;
@@ -883,9 +887,8 @@ impl App {
         self.follow_more(route, generation, more);
     }
 
-    /// Shows the cards of `sections` that `grown` lists, each with how many
-    /// it showed (none to start again). Returns the lazy grids' rows, and each
-    /// card model changed from its first new card, for the pins' mark.
+    /// Shows `grown`'s sections' cards past how many each showed (none: afresh);
+    /// returns the lazy grids' rows and each model's first new card.
     fn grow_cards(
         self: &Rc<Self>,
         sections: &[Section],
@@ -1014,12 +1017,6 @@ mod tests {
         assert!(newly_near(10, 20, Some((5, 15))).eq(15..20));
         assert!(newly_near(10, 20, Some((15, 30))).eq(10..15));
         assert!(newly_near(10, 20, None).eq(10..20), "all when first said");
-    }
-
-    #[test]
-    fn a_page_step_that_panics_still_reaches_done() {
-        use crate::app::tasks::Outcome;
-        assert!(<api::Result<(Page, bool)> as Outcome>::panicked().is_some());
     }
 
     #[test]

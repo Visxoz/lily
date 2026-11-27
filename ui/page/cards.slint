@@ -210,8 +210,7 @@ export component GenreTile inherits Rectangle {
 
 export component CardGrid {
     in property <[CardItem]> cards;
-    /// Its page row, and whether it is lazy, with the part of it on screen,
-    /// from `view-top` down.
+    /// Its page row, and if lazy, the part on screen from `view-top` down.
     in property <int> page-row;
     in property <bool> lazy;
     in property <length> view-top;
