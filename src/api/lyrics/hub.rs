@@ -37,14 +37,16 @@ pub(in crate::api) struct Found {
     /// Apple Music's lyrics and those like them.
     pub apple: Vec<Lyrics>,
     pub others: Vec<Lyrics>,
-    /// The hub heard back from these, with lyrics or without.
+    /// Asked already, by the hub or for lrc.red by `other_sites`, with lyrics
+    /// or without, so not to be asked again.
     pub asked_lrc_red: bool,
     pub asked_lrclib: bool,
 }
 
 /// `None` without a pass, which is then checked for the songs after, or when
-/// the hub fails. Events are read as they arrive, so a slow site or a stall
-/// keeps what came before it.
+/// the hub fails. Events are read as they arrive, until nothing still to come
+/// could be chosen over what has, so a slow site or a stall keeps what came
+/// before it.
 pub(super) async fn lyrics(track: &Track) -> Option<Found> {
     let jwt = current()?;
     let artist = track.artist_names();
@@ -72,7 +74,7 @@ pub(super) async fn lyrics(track: &Track) -> Option<Found> {
     }
     let mut answer = Answer::default();
     let (mut buffer, mut total) = (Vec::new(), 0);
-    while !answer.has_best()
+    while !answer.settled()
         && total <= sites::MAX_BODY
         && let Ok(Ok(Some(chunk))) = tokio::time::timeout_at(deadline, response.chunk()).await
     {
@@ -102,9 +104,19 @@ struct Answer {
 }
 
 impl Answer {
-    /// Apple Music's word timing, which nothing later beats.
-    fn has_best(&self) -> bool {
-        self.slots[0].as_ref().is_some_and(Lyrics::is_word_synced)
+    /// Word timing from a site every one ranked above answered without, which
+    /// `chosen` prefers in this order. Unchecked yet, so one that disagrees
+    /// costs the later sites.
+    fn settled(&self) -> bool {
+        for (slot, &heard) in self.slots.iter().zip(&self.heard) {
+            if !heard {
+                return false;
+            }
+            if slot.as_ref().is_some_and(Lyrics::is_word_synced) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Reads the events `chunk` completes, keeping an unfinished one in `buffer`.
@@ -345,8 +357,6 @@ mod tests {
 
     #[test]
     fn reads_each_sites_lyrics_best_first() {
-        let ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="1.0" end="2.0">Alpha</p></div></body></tt>"#;
-        let qrc = r#"<QrcInfos><Lyric_1 LyricContent="[1000,1000]Alpha(1000,1000)"/></QrcInfos>"#;
         let stream = [
             "event: metadata\r\ndata: {\"song\":\"Dummy Song\"}\r\n\r\n".to_owned(),
             event(
@@ -355,15 +365,15 @@ mod tests {
             ),
             event(
                 "qq",
-                serde_json::json!({ "lyrics": serde_json::json!({ "lyrics": qrc }).to_string() }),
+                serde_json::json!({ "lyrics": serde_json::json!({ "lyrics": QRC }).to_string() }),
             ),
             event(
                 "binimum",
-                serde_json::json!({ "lyrics": ttml, "timingType": "line" }),
+                serde_json::json!({ "lyrics": LINE_TIMED, "timingType": "line" }),
             ),
             event(
                 "golyrics",
-                serde_json::json!({ "lyrics": serde_json::json!({ "ttml": ttml }).to_string() }),
+                serde_json::json!({ "lyrics": serde_json::json!({ "ttml": LINE_TIMED }).to_string() }),
             ),
             // Split over two `data:` lines, which join.
             event(
@@ -386,7 +396,6 @@ mod tests {
             answer.found()
         };
         let found = read_all(&stream);
-        let sources = |list: &[Lyrics]| list.iter().map(|l| l.source.clone()).collect::<Vec<_>>();
         assert_eq!(
             sources(&found.apple),
             ["Source: Better Lyrics", "Source: lrc.red"]
@@ -405,6 +414,77 @@ mod tests {
         );
         assert!(found.asked_lrc_red && found.asked_lrclib);
         assert_eq!(read_all("<html>busy</html>"), Found::default());
+    }
+
+    const LINE_TIMED: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="1.0" end="2.0">Alpha</p></div></body></tt>"#;
+    const WORD_TIMED: &str = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="1.0" end="2.0"><span begin="1.0" end="1.5">Al</span><span begin="1.5" end="2.0">pha</span></p></div></body></tt>"#;
+    const QRC: &str =
+        r#"<QrcInfos><Lyric_1 LyricContent="[1000,1000]Alpha(1000,1000)"/></QrcInfos>"#;
+
+    fn sources(list: &[Lyrics]) -> Vec<&str> {
+        list.iter().map(|l| l.source.as_str()).collect()
+    }
+
+    #[test]
+    fn settles_once_nothing_to_come_could_be_chosen() {
+        assert!(formats::ttml(WORD_TIMED, "").is_some_and(|l| l.is_word_synced()));
+        let (mut answer, mut buffer) = (Answer::default(), Vec::new());
+        let events = [
+            event("binimum", serde_json::json!({ "lyrics": LINE_TIMED })),
+            event("golyrics", serde_json::json!({})),
+            event("spicy", serde_json::json!({ "lyrics": WORD_TIMED })),
+        ];
+        for (i, event) in events.iter().enumerate() {
+            assert!(!answer.settled(), "settled before event {i}");
+            answer.feed(&mut buffer, event.replace('\n', "\r\n").as_bytes());
+        }
+        assert!(answer.settled());
+        // A half-sent event, as a stall leaves, adds nothing to what came.
+        answer.feed(&mut buffer, b"data: {\"provi");
+        answer.read(&String::from_utf8_lossy(&buffer));
+        let found = answer.found();
+        assert_eq!(
+            sources(&found.apple),
+            ["Source: Spicy Lyrics", "Source: lrc.red"]
+        );
+        assert!(found.asked_lrc_red && !found.asked_lrclib);
+    }
+
+    #[test]
+    fn reads_on_while_a_better_site_may_answer() {
+        let golyrics = serde_json::json!({ "ttml": WORD_TIMED }).to_string();
+        let (mut answer, mut buffer) = (Answer::default(), Vec::new());
+        answer.feed(
+            &mut buffer,
+            event("spicy", serde_json::json!({ "lyrics": WORD_TIMED })).as_bytes(),
+        );
+        assert!(!answer.settled(), "Apple Music's may still come");
+        answer.feed(
+            &mut buffer,
+            event("golyrics", serde_json::json!({ "lyrics": golyrics })).as_bytes(),
+        );
+        assert!(answer.settled());
+        assert_eq!(
+            sources(&answer.found().apple),
+            ["Source: Better Lyrics", "Source: Spicy Lyrics"]
+        );
+    }
+
+    #[test]
+    fn settles_on_other_sites_word_timing_once_apple_musics_kind_has_none() {
+        let (mut answer, mut buffer) = (Answer::default(), Vec::new());
+        let qq = serde_json::json!({ "lyrics": QRC });
+        answer.feed(&mut buffer, event("qq", qq).as_bytes());
+        for provider in ["golyrics", "spicy"] {
+            answer.feed(
+                &mut buffer,
+                event(provider, serde_json::json!({})).as_bytes(),
+            );
+            assert!(!answer.settled(), "binimum may still come");
+        }
+        let binimum = serde_json::json!({ "lyrics": LINE_TIMED });
+        answer.feed(&mut buffer, event("binimum", binimum).as_bytes());
+        assert!(answer.settled(), "KuGou's and LRCLIB's rank below QQ's");
     }
 
     #[test]

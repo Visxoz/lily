@@ -117,7 +117,7 @@ pub(super) async fn find(
     let (own, found) = tokio::try_join!(own, sites)?;
     let reference = own.as_ref().map(matching::Reference::new);
     let agree = |lyrics: &Lyrics| checked(lyrics, reference.as_ref());
-    let apple: Vec<_> = found.apple.into_iter().filter(agree).collect();
+    let mut apple: Vec<_> = found.apple.into_iter().filter(agree).collect();
     let mut others: Vec<_> = found.others.into_iter().filter(agree).collect();
     let mut agreed = apple.iter().chain(&others);
     // KuGou is slow and often has another version, so it's asked only for word
@@ -127,23 +127,40 @@ pub(super) async fn find(
     let wants_lines = !own.as_ref().is_some_and(Lyrics::is_synced)
         && !found.asked_lrclib
         && !agreed.any(Lyrics::is_synced);
-    let (kugou, lrclib) = tokio::join!(
+    // The hub may have stopped on disagreeing word timing before lrc.red answered.
+    let wants_lrc_red = wants_words && !found.asked_lrc_red;
+    let (kugou, lrclib, lrc_red) = tokio::join!(
         within(wants_words, Duration::from_secs(4), sites::kugou(track)),
         within(wants_lines, Duration::from_secs(7), sites::lrclib(track)),
+        within(wants_lrc_red, LRC_RED_WITHIN, sites::lrc_red(track)),
     );
     others.extend([kugou, lrclib].into_iter().flatten().filter(agree));
+    apple.extend(lrc_red.filter(agree));
     Ok(chosen(own, apple, others))
 }
 
+/// lrc.red can take three requests in turn.
+const LRC_RED_WITHIN: Duration = Duration::from_secs(6);
+
 /// The hub's lyrics, and lrc.red's when the hub has no Apple Music word
-/// timing and didn't hear from lrc.red; both run alongside YouTube's.
+/// timing and lrc.red's answer may differ from the hub's; both run alongside
+/// YouTube's.
 async fn other_sites(track: &Track) -> hub::Found {
     let mut found = hub::lyrics(track).await.unwrap_or_default();
-    let wanted = !found.asked_lrc_red && !found.apple.iter().any(Lyrics::is_word_synced);
-    if let Some(lyrics) = within(wanted, Duration::from_secs(6), sites::lrc_red(track)).await {
-        found.apple.push(lyrics);
+    if found.apple.iter().any(Lyrics::is_word_synced) || hub_answered_for_lrc_red(&found, track) {
+        return found;
     }
     found
+        .apple
+        .extend(within(true, LRC_RED_WITHIN, sites::lrc_red(track)).await);
+    found.asked_lrc_red = true;
+    found
+}
+
+/// The hub's binimum is lrc.red, so its answer, lyrics or none, is lrc.red's,
+/// unless lrc.red would be asked under other names than the hub was.
+fn hub_answered_for_lrc_red(found: &hub::Found, track: &Track) -> bool {
+    found.asked_lrc_red && sites::lrc_red_searches_as_given(track)
 }
 
 async fn within<T>(
@@ -167,7 +184,8 @@ fn checked(other: &Lyrics, own: Option<&matching::Reference>) -> bool {
 
 /// Word timing, Apple Music's kind first; then timed lines, Apple Music's
 /// kind, YouTube's, then the others'; then YouTube's text, or any. The other
-/// sites' have passed `checked`, and come best first.
+/// sites' have passed `checked`, and come best first. `hub::Answer::settled`
+/// stops reading the hub by this ranking.
 fn chosen(own: Option<Lyrics>, apple: Vec<Lyrics>, others: Vec<Lyrics>) -> Option<Lyrics> {
     let split = apple.len();
     let mut sites = apple;
@@ -363,5 +381,51 @@ mod tests {
             "better than none"
         );
         assert_eq!(chosen(None, Vec::new(), Vec::new()), None);
+    }
+
+    #[test]
+    fn lrc_red_is_asked_only_where_the_hubs_answer_is_not_its_own() {
+        let track = |title: &str, artist: &str| Track {
+            title: title.into(),
+            artists: vec![crate::api::ArtistRef {
+                id: None,
+                name: artist.into(),
+            }],
+            duration: Some(200),
+            ..Track::default()
+        };
+        let plain = track("Alpha", "Beta");
+        let missed = hub::Found {
+            asked_lrc_red: true,
+            ..hub::Found::default()
+        };
+        assert!(hub_answered_for_lrc_red(&missed, &plain));
+        assert!(
+            !hub_answered_for_lrc_red(&hub::Found::default(), &plain),
+            "lrc.red never answered"
+        );
+        let lines = hub::Found {
+            apple: vec![lyrics(&[1.0, 3.0], false, sites::LRC_RED)],
+            asked_lrc_red: true,
+            ..hub::Found::default()
+        };
+        assert!(
+            hub_answered_for_lrc_red(&lines, &plain),
+            "the same search finds the same lyrics"
+        );
+        for (title, artist, why) in [
+            ("Alpha (feat. Gamma)", "Beta", "searched without the credit"),
+            ("晴天", "周杰倫", "searched again in Simplified"),
+            ("Alpha", "Beta - Topic", "searched without \" - Topic\""),
+        ] {
+            assert!(
+                !hub_answered_for_lrc_red(&missed, &track(title, artist)),
+                "{why}"
+            );
+        }
+        assert!(
+            hub_answered_for_lrc_red(&missed, &track("ハレ晴レ", "周杰倫")),
+            "kana, so not simplified"
+        );
     }
 }

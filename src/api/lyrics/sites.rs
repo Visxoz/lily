@@ -1,6 +1,8 @@
 //! Lyrics sites other than YouTube, each a miss on any failure, as YouTube's
 //! own lyrics stand without them.
 
+use std::borrow::Cow;
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -117,18 +119,35 @@ pub(super) async fn lrc_red(track: &Track) -> Option<Lyrics> {
     let artist = matching::artist(track)?;
     let title = matching::title(&track.title);
     let mut isrc = lrc_red_search(&title, &artist, track).await;
-    // Chinese songs are filed in Simplified characters. Kana mark Japanese,
-    // whose kanji aren't Chinese to simplify.
-    let kana = |text: &str| text.chars().any(|c| ('\u{3040}'..'\u{3100}').contains(&c));
-    if isrc.is_none() && !kana(&title) && !kana(&artist) {
-        let (simple_title, simple_artist) =
-            (matching::simplified(&title), matching::simplified(&artist));
-        if simple_title != title || simple_artist != artist {
-            isrc = lrc_red_search(&simple_title, &simple_artist, track).await;
-        }
+    if isrc.is_none()
+        && let Some((title, artist)) = simplified(&title, &artist)
+    {
+        isrc = lrc_red_search(&title, &artist, track).await;
     }
     let ttml = get("lrc.red", &format!("/s/{}.ttml", isrc?), &[]).await?;
     formats::ttml(std::str::from_utf8(&ttml).ok()?, LRC_RED)
+}
+
+/// Whether `lrc_red` searches only under the names the hub is sent, with
+/// nothing cut or simplified.
+pub(super) fn lrc_red_searches_as_given(track: &Track) -> bool {
+    let Some(artist) = matching::artist(track) else {
+        return true;
+    };
+    let title = matching::title(&track.title);
+    title == track.title && artist == track.artist_names() && simplified(&title, &artist).is_none()
+}
+
+/// The names in Simplified characters, which Chinese songs are filed under,
+/// should that change them. Kana mark Japanese, whose kanji aren't Chinese to
+/// simplify.
+fn simplified<'a>(title: &'a str, artist: &'a str) -> Option<(Cow<'a, str>, Cow<'a, str>)> {
+    let kana = |text: &str| text.chars().any(|c| ('\u{3040}'..'\u{3100}').contains(&c));
+    if kana(title) || kana(artist) {
+        return None;
+    }
+    let names = (matching::simplified(title), matching::simplified(artist));
+    (names.0 != title || names.1 != artist).then_some(names)
 }
 
 async fn lrc_red_search(title: &str, artist: &str, track: &Track) -> Option<String> {
