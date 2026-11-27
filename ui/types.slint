@@ -60,6 +60,8 @@ export struct RowItem {
     show-album: bool,
     // card rows
     cards: [CardItem],
+    /// A grid long enough to hold art only near the screen: see `grid-lines`.
+    lazy-art: bool,
     /// A song shelf's songs, in columns that scroll sideways.
     tracks: [TrackItem],
     // where the row's items live in the page, for callbacks
@@ -103,6 +105,9 @@ export global Api {
     /// A page or queue row without its artwork has come on screen.
     callback row-art(row: int);
     callback queue-art(row: int);
+    /// A lazy grid in page row `row` now has cards `first` up to `end` near
+    /// the screen, a line crossed at a time.
+    callback grid-lines(row: int, first: int, end: int);
     callback track-action(action: string, section: int, index: int);
     callback play-card(kind: string, id: string);
     callback card-radio(kind: string, id: string);

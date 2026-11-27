@@ -1,5 +1,5 @@
 pub use rustypipe::model::PlaylistPrivacy;
-use rustypipe::model::{MusicItem, TrackItem, paginator::Paginator};
+use rustypipe::model::{AlbumItem, MusicItem, TrackItem, paginator::Paginator};
 
 use super::convert::{HEADER_THUMB, join_artists, resize_thumb};
 
@@ -203,6 +203,10 @@ pub struct Page {
     /// What the page still has to fetch after it shows; `Api::complete`
     /// fetches a step of it at a time.
     pub more: Option<More>,
+    /// Library's albums are only the first part of the list: the rest is still
+    /// to come, was left unasked, or a step for it failed. Ordering them would
+    /// mislead.
+    pub albums_cut_short: bool,
 }
 
 impl Page {
@@ -224,6 +228,9 @@ pub enum More {
     Shelves(super::home_feed::Feed),
     /// The rest of one kind of search result.
     Search(Paginator<MusicItem>),
+    /// Library's further saved albums, a page a step; the items already shown
+    /// are taken out.
+    Albums(Paginator<AlbumItem>),
 }
 
 #[derive(Debug, Clone)]

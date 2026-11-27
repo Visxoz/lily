@@ -193,11 +193,28 @@ export component GenreTile inherits Rectangle {
 
 export component CardGrid {
     in property <[CardItem]> cards;
+    /// Its page row, and whether it is lazy, with the part of it on screen,
+    /// from `view-top` down.
+    in property <int> page-row;
+    in property <bool> lazy;
+    in property <length> view-top;
+    in property <length> view-height;
     out property <int> columns: Layout.card-columns(root.width);
     property <length> cell: Layout.card-cell(root.width);
+    property <length> line: Layout.card-height(root.cell) + Layout.card-gap;
+    // Half a screen either side, so art is in by the time it shows.
+    if root.lazy: Rectangle {
+        width: 0;
+        height: 0;
+        property <int> first: max(0, floor((root.view-top - root.view-height / 2) / root.line)) * root.columns;
+        property <int> end: max(0, floor((root.view-top + root.view-height * 1.5) / root.line) + 1) * root.columns;
+        property <string> lines: "\{self.first}/\{self.end}";
+        init => { Api.grid-lines(root.page-row, self.first, self.end); }
+        changed lines => { Api.grid-lines(root.page-row, self.first, self.end); }
+    }
     for card[i] in root.cards: Card {
         x: -Layout.card-padding + mod(i, root.columns) * (root.cell + Layout.card-gap);
-        y: floor(i / root.columns) * (Layout.card-height(root.cell) + Layout.card-gap);
+        y: floor(i / root.columns) * root.line;
         width: root.cell;
         card: card;
     }

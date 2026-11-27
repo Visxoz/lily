@@ -10,6 +10,9 @@ export component PageRow {
     in property <RowItem> data;
     in property <length> content-width;
     in property <int> index;
+    /// The part of the row on screen, from `view-top` down, for a lazy grid.
+    in property <length> view-top;
+    in property <length> view-height;
     /// Home's shelf titles are quieter, as its wash already heads the page.
     in property <bool> home;
     property <length> inner: root.content-width - 2 * Theme.page-padding;
@@ -131,6 +134,10 @@ export component PageRow {
         width: root.inner;
         height: root.height;
         cards: root.data.cards;
+        page-row: root.index;
+        lazy: root.data.lazy-art;
+        view-top: root.view-top;
+        view-height: root.view-height;
     }
     if root.data.kind == RowKind.chips: GenreGrid {
         x: Theme.page-padding;

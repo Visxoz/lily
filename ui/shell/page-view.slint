@@ -148,6 +148,9 @@ export component PageView inherits Rectangle {
                 for row[i] in root.rows: PageRow {
                     data: row;
                     index: i;
+                    // A row's `y` is its place in the content, so the scroll comes off here.
+                    view-top: -list.content-y - self.y;
+                    view-height: list.visible-height;
                     home: root.home;
                     // Not during the page's own fade, or the two compound.
                     fade-in: root.settling && content.opacity >= 1;

@@ -251,6 +251,7 @@ export component SettingsDialog inherits Dialog {
     in property <int> accent-choice;
     in property <int> look-choice;
     in property <bool> close-to-tray;
+    in property <bool> albums-by-artist;
     in property <bool> animated-art;
     in property <bool> spotify-signed-in;
     in property <bool> spotify-signing-in;
@@ -283,6 +284,7 @@ export component SettingsDialog inherits Dialog {
     callback set-look(index: int);
     callback set-accent(index: int);
     callback set-close-to-tray(value: bool);
+    callback set-albums-by-artist(value: bool);
     callback set-animated-art(value: bool);
     callback spotify-sign-in();
     callback spotify-sign-out();
@@ -547,6 +549,13 @@ export component SettingsDialog inherits Dialog {
             detail: "Closing the window keeps the music playing, with Lily's icon in the system tray to bring it back or quit.";
             checked: root.close-to-tray;
             toggled(v) => { root.set-close-to-tray(v); }
+        }
+
+        ToggleRow {
+            label: "Albums by artist";
+            detail: "Loads all your saved albums into Library and orders them by artist, then title, rather than as YouTube Music lists them.";
+            checked: root.albums-by-artist;
+            toggled(v) => { root.set-albums-by-artist(v); }
         }
 
         ToggleRow {

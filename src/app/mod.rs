@@ -77,6 +77,8 @@ pub struct App {
     /// The page's and the queue's row artwork.
     row_art: RowArt,
     queue_art: RowArt,
+    /// Each lazy grid's cards near the screen, by page row, as it last said.
+    grid_lines: RefCell<HashMap<usize, (usize, usize)>>,
     /// The page's and the queue's artwork is let go while the window is hidden.
     art_hidden: Cell<bool>,
     tick: Timer,
@@ -232,6 +234,7 @@ impl App {
             selection: Cell::new(now_playing::queue_panel::Selection::default()),
             row_art: RowArt::default(),
             queue_art: RowArt::default(),
+            grid_lines: RefCell::default(),
             art_hidden: Cell::new(false),
             tick: Timer::default(),
             eq_timer: Timer::default(),

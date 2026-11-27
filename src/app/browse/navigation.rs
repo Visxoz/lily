@@ -5,6 +5,7 @@ use std::{
 
 use slint::{ComponentHandle, ModelRc, SharedString, TimerMode, VecModel};
 
+use super::page::drop_albums_rest_unless;
 use crate::app::{App, HistoryEntry, s};
 use crate::{
     Api as ApiGlobal, AppWindow,
@@ -161,7 +162,8 @@ impl App {
         let ui = self.ui();
         ui.set_page_loading(false);
         match result {
-            Ok(page) => {
+            Ok(mut page) => {
+                drop_albums_rest_unless(&mut page, self.state.borrow().settings.albums_by_artist);
                 if let Some(route) = cache_as {
                     self.cache_page(route, page.clone());
                 }
@@ -194,9 +196,11 @@ impl App {
         let api = self.api.clone();
         let asked = route.clone();
         let edits = self.state.borrow().page_edits.get(&route).copied();
+        let by_artist = self.state.borrow().settings.albums_by_artist;
         self.spawn(
             async move {
                 let mut page = api.page(&asked, signed_in).await?;
+                drop_albums_rest_unless(&mut page, by_artist);
                 while page.more.is_some() {
                     let whole;
                     (page, whole) = api.complete(page).await;
@@ -214,6 +218,10 @@ impl App {
                         return;
                     }
                 };
+                // Asked without the rest of the albums, which are now wanted.
+                if page.albums_cut_short && app.state.borrow().settings.albums_by_artist {
+                    return;
+                }
                 let (ours, swap) = {
                     let state = app.state.borrow();
                     // Gone, as after a like or signing out, it is to load
@@ -239,8 +247,11 @@ impl App {
                     // what is shown, so its fresh feed waits for the next visit.
                     let swap = current
                         && !home
-                        && (state.page.header != page.header
-                            || state.page.sections != page.sections);
+                        && (state.page.header != page.header || {
+                            // Against the fresh copy as it would show.
+                            let ordered = super::page::albums_in_order(&state, &page);
+                            state.page.sections != *ordered.as_ref().unwrap_or(&page.sections)
+                        });
                     (ours, swap)
                 };
                 if ours && home {
@@ -305,9 +316,8 @@ impl App {
                 }
                 Err(Some(sections)) => {
                     let page = Page {
-                        header: None,
                         sections,
-                        more: None,
+                        ..Default::default()
                     };
                     app.page_loaded(generation, Ok(page), None);
                 }
@@ -369,6 +379,47 @@ impl App {
                 self.state.borrow_mut().restore_scroll = None;
                 ui.set_page_error(empty.into());
             }
+        }
+    }
+
+    /// A cached Library holding only part of its albums loads again for the
+    /// rest once they go by artist, and turned off asks for no more; one on
+    /// screen shows again in place, while one loading takes the setting as it
+    /// arrives.
+    pub(in crate::app) fn set_albums_by_artist(self: &Rc<Self>, on: bool) {
+        self.update_settings(|s| s.albums_by_artist = on);
+        let ui = self.ui();
+        let cached = {
+            let mut state = self.state.borrow_mut();
+            let shown = state.route == Route::Library && state.signed_in && !ui.get_page_loading();
+            let cache = &mut state.page_cache;
+            let cut_short = cache
+                .get(&Route::Library)
+                .is_some_and(|(page, _)| page.albums_cut_short);
+            if on && cut_short {
+                cache.remove(&Route::Library);
+            } else if let Some((page, _)) = cache.get_mut(&Route::Library) {
+                drop_albums_rest_unless(page, on);
+            }
+            // Shown in YouTube's order already, as only part came; a step on
+            // its way asks for no more once in.
+            if !shown || (!on && state.page.albums_cut_short) {
+                return;
+            }
+            state.restore_scroll = Some(ui.get_page_scroll());
+            state
+                .page_cache
+                .get(&Route::Library)
+                .map(|(page, _)| page.clone())
+        };
+        match cached {
+            // Even expired, so the setting alone asks for nothing.
+            Some(page) => {
+                // Rows move, so art still on its way to their old places is dropped.
+                self.state.borrow_mut().page_generation += 1;
+                self.show_page(page);
+            }
+            None => self.navigate(Route::Library, false),
         }
     }
 

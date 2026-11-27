@@ -248,6 +248,8 @@ impl App {
         on!(on_set_speed, |app, index| app.set_speed(index as usize));
         on!(on_set_close_to_tray, |app, value| app
             .set_close_to_tray(value));
+        on!(on_set_albums_by_artist, |app, value| app
+            .set_albums_by_artist(value));
         on!(on_set_autoplay, |app, value| app
             .update_settings(|s| s.autoplay = value));
         on!(on_set_check_updates, |app, value| {
@@ -315,6 +317,8 @@ impl App {
             .on_row_art(App::load_row_art, row));
         on!(api.on_queue_art, |app, row| app
             .on_row_art(App::load_queue_art, row));
+        on!(api.on_grid_lines, |app, row, first, end| app
+            .on_grid_lines(row, first, end));
         on!(api.on_play_track, |app, section, index| app
             .play_from_section(section as usize, index as usize));
         on!(api.on_track_action, |app, action, section, index| app

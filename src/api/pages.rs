@@ -8,9 +8,9 @@ use super::{
     Api, Card, CardKind, CardLayout, Header, More, MoreTracks, PLAYLIST_LIMIT, Page, QueueMode,
     Result, Route, SHELF_SONGS, SearchKind, Section,
     convert::{
-        CARD_THUMB, HEADER_THUMB, ROW_THUMB, album_card, album_type, artist_card, artist_refs,
-        card_section, genre_card, join_artists, pick_thumb, playlist_card, playlist_tracks, track,
-        track_section, tracks,
+        ALBUMS, CARD_THUMB, HEADER_THUMB, ROW_THUMB, album_card, album_type, artist_card,
+        artist_refs, card_section, genre_card, join_artists, pick_thumb, playlist_card,
+        playlist_tracks, saved_albums, track, track_section, tracks,
     },
     err,
     format::{compact, playlist_meta, songs, total_time},
@@ -34,9 +34,8 @@ fn genre_section(genres: Vec<MusicGenreItem>) -> Option<Section> {
 
 fn sections_page(sections: Vec<Section>) -> Page {
     Page {
-        header: None,
         sections,
-        more: None,
+        ..Default::default()
     }
 }
 
@@ -150,6 +149,7 @@ impl Api {
             header: None,
             sections,
             more: (!feed.done()).then_some(More::Shelves(feed)),
+            ..Default::default()
         })
     }
 
@@ -264,7 +264,7 @@ impl Api {
                 mode: QueueMode::Section,
                 numbered: false,
             }],
-            more: None,
+            ..Default::default()
         })
     }
 
@@ -276,16 +276,22 @@ impl Api {
             q.music_saved_artists(),
         );
         let playlist_cards = playlist_cards?;
+        // The rest is the app's to ask for or drop, as only ordering needs it.
+        let (albums, more, albums_cut_short) = match albums {
+            Ok(mut rest) => {
+                let albums = std::mem::take(&mut rest.items);
+                let cut_short = !rest.is_exhausted();
+                // Only a list shown has a section for the rest to join.
+                let more = (cut_short && !albums.is_empty()).then_some(More::Albums(rest));
+                (albums, more, cut_short)
+            }
+            Err(_) => (Vec::new(), None, false),
+        };
         let mut sections = Vec::new();
         sections.extend(card_section("Playlists", playlist_cards, CardLayout::Grid));
         sections.extend(card_section(
-            "Albums",
-            albums
-                .map(|p| p.items)
-                .unwrap_or_default()
-                .into_iter()
-                .map(album_card)
-                .collect(),
+            ALBUMS,
+            albums.into_iter().map(album_card).collect(),
             CardLayout::Grid,
         ));
         sections.extend(card_section(
@@ -298,7 +304,12 @@ impl Api {
                 .collect(),
             CardLayout::Grid,
         ));
-        Ok(sections_page(sections))
+        Ok(Page {
+            sections,
+            more,
+            albums_cut_short,
+            ..Default::default()
+        })
     }
 
     /// Liked music followed by the saved playlists, for the sidebar.
@@ -433,6 +444,7 @@ impl Api {
             header: None,
             sections: vec![section],
             more: (room && results.ctoken.is_some()).then_some(More::Search(results)),
+            ..Default::default()
         })
     }
 
@@ -486,7 +498,7 @@ impl Api {
         Ok(Page {
             header: Some(header),
             sections,
-            more: None,
+            ..Default::default()
         })
     }
 
@@ -535,12 +547,13 @@ impl Api {
             header: Some(header),
             sections,
             more,
+            ..Default::default()
         })
     }
 
     /// Fetches the next step of what `page` has still to show, and leaves
     /// `more` set while there is another. Keeps what arrived should a
-    /// request fail, and says whether one did.
+    /// request fail, and says whether all of it came.
     pub async fn complete(&self, mut page: Page) -> (Page, bool) {
         let mut whole = true;
         match page.more.take() {
@@ -593,6 +606,27 @@ impl Api {
                 page.sections.extend(feed.release());
                 if !feed.done() {
                     page.more = Some(More::Shelves(feed));
+                }
+            }
+            // A page a step, so leaving Library stops it.
+            Some(More::Albums(mut rest)) => {
+                let asked = rest.ctoken.clone();
+                if let Err(e) = rest.extend(self.q()).await {
+                    log::warn!("could not load more of the saved albums: {e}");
+                }
+                let added = std::mem::take(&mut rest.items);
+                let more = !added.is_empty() && rest.ctoken != asked;
+                if let Some(cards) = saved_albums(&mut page.sections) {
+                    cards.extend(added.into_iter().map(album_card));
+                }
+                if rest.is_exhausted() {
+                    page.albums_cut_short = false;
+                } else if more {
+                    page.more = Some(More::Albums(rest));
+                } else {
+                    // Failed, or a page that adds nothing or points back at
+                    // itself, which would ask again for ever.
+                    whole = false;
                 }
             }
         }
@@ -682,7 +716,7 @@ impl Api {
         Ok(Page {
             header: Some(header),
             sections,
-            more: None,
+            ..Default::default()
         })
     }
 
@@ -706,7 +740,7 @@ impl Api {
                 ..Default::default()
             }),
             sections,
-            more: None,
+            ..Default::default()
         })
     }
 }

@@ -520,7 +520,7 @@ mod tests {
                 mode: QueueMode::Section,
                 numbered: false,
             }],
-            more: None,
+            ..Default::default()
         }
     }
 

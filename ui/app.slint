@@ -153,6 +153,7 @@ export component AppWindow inherits Window {
     in property <bool> automix;
     in property <bool> pause-on-unplug;
     in property <bool> close-to-tray;
+    in property <bool> albums-by-artist;
     in property <bool> animated-art;
     in property <bool> spotify-signed-in;
     in property <bool> spotify-signing-in;
@@ -279,6 +280,7 @@ export component AppWindow inherits Window {
     callback set-automix(value: bool);
     callback set-pause-on-unplug(value: bool);
     callback set-close-to-tray(value: bool);
+    callback set-albums-by-artist(value: bool);
     callback set-animated-art(value: bool);
     callback spotify-sign-in();
     callback spotify-sign-out();
@@ -674,6 +676,8 @@ export component AppWindow inherits Window {
             look-choice: root.look-choice;
             close-to-tray: root.close-to-tray;
             set-close-to-tray(v) => { root.set-close-to-tray(v); }
+            albums-by-artist: root.albums-by-artist;
+            set-albums-by-artist(v) => { root.set-albums-by-artist(v); }
             animated-art: root.animated-art;
             spotify-signed-in: root.spotify-signed-in;
             spotify-signing-in: root.spotify-signing-in;

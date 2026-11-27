@@ -244,6 +244,8 @@ pub struct Settings {
     pub balance: f32,
     pub look: Look,
     pub accent: Accent,
+    /// Library's albums by artist rather than as YouTube Music sorts them.
+    pub albums_by_artist: bool,
     /// The full player plays the song's Spotify Canvas or its album's Apple
     /// Music motion cover, where there is one.
     pub animated_art: bool,
@@ -363,6 +365,7 @@ impl Default for Settings {
             balance: 0.0,
             look: Look::Black,
             accent: Accent::Lily,
+            albums_by_artist: false,
             animated_art: false,
             lyrics_translation: false,
             lyrics_romanisation: false,
@@ -500,6 +503,7 @@ mod tests {
         assert_eq!(settings.normalise, crate::audio::Normalise::Normal);
         assert!(!settings.crossfade, "off until chosen");
         assert!(!settings.automix, "off until chosen");
+        assert!(!settings.albums_by_artist, "YouTube's order until chosen");
         assert!(
             CROSSFADE_SECS.contains(&settings.crossfade_secs),
             "a length Settings offers"

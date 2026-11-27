@@ -1,6 +1,12 @@
+use std::ptr;
+
 use rustypipe::model::{
     AlbumItem, AlbumType, ArtistId, ArtistItem, MusicGenreItem, MusicPlaylistItem, Thumbnail,
     TrackItem, TrackType,
+};
+use windows_sys::Win32::Globalization::{
+    LCMAP_SORTKEY, LCMapStringEx, LINGUISTIC_IGNORECASE, LINGUISTIC_IGNOREDIACRITIC,
+    NORM_IGNOREWIDTH, SORT_DIGITSASNUMBERS,
 };
 
 use super::{
@@ -120,6 +126,87 @@ pub fn album_card(a: AlbumItem) -> Card {
     }
 }
 
+/// Library's section of saved albums.
+pub(super) const ALBUMS: &str = "Albums";
+
+/// Library's saved albums, should `sections` hold them.
+pub(super) fn saved_albums(sections: &mut [Section]) -> Option<&mut Vec<Card>> {
+    sections.iter_mut().find_map(|s| match s {
+        Section::Cards { title, cards, .. } if title == ALBUMS => Some(cards),
+        _ => None,
+    })
+}
+
+/// Library's albums by artist, then title, as Windows sorts names for the
+/// user's language, whatever the case or accents and numbers by value, with
+/// those by no one named last and ties as they came.
+pub fn sort_by_artist(sections: &mut [Section]) {
+    if let Some(cards) = saved_albums(sections) {
+        cards.sort_by_cached_key(|c| {
+            let artist = album_artist(&c.subtitle);
+            (artist.is_empty(), sort_key(artist), sort_key(&c.title))
+        });
+    }
+}
+
+/// `text`'s sort key for the user's language, whose bytes compare as Windows
+/// compares the text; empty should Windows refuse it.
+fn sort_key(text: &str) -> Vec<u8> {
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let Ok(len) = i32::try_from(wide.len()) else {
+        return Vec::new();
+    };
+    if len == 0 {
+        return Vec::new();
+    }
+    let flags = LCMAP_SORTKEY
+        | LINGUISTIC_IGNORECASE
+        | LINGUISTIC_IGNOREDIACRITIC
+        | NORM_IGNOREWIDTH
+        | SORT_DIGITSASNUMBERS;
+    let map = |out: &mut [u8]| {
+        let Ok(capacity) = i32::try_from(out.len()) else {
+            return 0;
+        };
+        // SAFETY: `wide` holds `len` units and `out` `capacity` bytes, both
+        // borrowed through the call, which with `LCMAP_SORTKEY` counts the
+        // destination in bytes, writes at most `capacity` of them and none
+        // when it is 0; a null locale is the user's.
+        unsafe {
+            LCMapStringEx(
+                ptr::null(),
+                flags,
+                wide.as_ptr(),
+                len,
+                out.as_mut_ptr().cast(),
+                capacity,
+                ptr::null(),
+                ptr::null(),
+                0,
+            )
+        }
+    };
+    let mut out = vec![0; usize::try_from(map(&mut [])).unwrap_or(0)];
+    let written = usize::try_from(map(&mut out)).unwrap_or(0);
+    out.truncate(written);
+    out
+}
+
+/// From `album_card`'s "Album • Artist • 2024": what lies between the type,
+/// which always leads, and any year.
+// shortcut: a four-digit artist without a year reads as the year; an artist on Card would tell them apart.
+fn album_artist(subtitle: &str) -> &str {
+    let is_year = |s: &str| s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit());
+    let Some((_, rest)) = subtitle.split_once(" • ") else {
+        return "";
+    };
+    match rest.rsplit_once(" • ") {
+        Some((artist, year)) if is_year(year) => artist,
+        None if is_year(rest) => "",
+        _ => rest,
+    }
+}
+
 pub fn artist_card(a: ArtistItem) -> Card {
     Card {
         kind: CardKind::Artist,
@@ -209,6 +296,58 @@ mod tests {
         );
         let ytimg = "https://i.ytimg.com/vi/x/hqdefault.jpg";
         assert_eq!(resize_thumb(ytimg, 360), ytimg);
+    }
+
+    #[test]
+    fn orders_albums_by_artist_then_title() {
+        let card = |kind, id: &str, title: &str, subtitle: &str| Card {
+            kind,
+            id: id.to_owned(),
+            title: title.to_owned(),
+            subtitle: subtitle.to_owned(),
+            thumb: None,
+            color: None,
+            track: None,
+        };
+        let album =
+            |id: &str, subtitle: &str| card(CardKind::Album, id, &format!("Album {id}"), subtitle);
+        fn ids(section: &Section) -> Vec<&str> {
+            match section {
+                Section::Cards { cards, .. } => cards.iter().map(|c| c.id.as_str()).collect(),
+                Section::Tracks { .. } => Vec::new(),
+            }
+        }
+        let others = card_section(
+            "Albums for you",
+            vec![album("z", "Album • Zed"), album("y", "Album • Abba")],
+            CardLayout::Grid,
+        );
+        let albums = card_section(
+            ALBUMS,
+            vec![
+                album("c", "Album • 2015"),
+                album("d", "EP • Tame Impala • 2019"),
+                album("a", "Single • Beck"),
+                card(CardKind::Album, "j", "Vol 10", "Album • Beck"),
+                card(CardKind::Album, "i", "Vol 2", "Album • Beck"),
+                album("b", "Album • Tame Impala • 2015"),
+                album("e", "Album • air • 1998"),
+                card(CardKind::Playlist, "p", "Mix", "Playlist • Zed"),
+                card(CardKind::Album, "g", "lemonade", "Album • BEYONCE"),
+                card(CardKind::Album, "f", "Lemonade", "Album • Beyoncé • 2016"),
+                album("h", "Album • Tyler, The Creator & Kali Uchis • 2017"),
+            ],
+            CardLayout::Grid,
+        );
+        let mut sections: Vec<Section> = others.into_iter().chain(albums).collect();
+        sort_by_artist(&mut sections);
+        assert_eq!(ids(&sections[0]), ["z", "y"], "only Library's own albums");
+        assert_eq!(
+            ids(&sections[1]),
+            ["e", "a", "i", "j", "g", "f", "b", "d", "h", "p", "c"],
+            "by artist whatever the case or accents, then title with numbers by value, ties as \
+             they came, a stray card too, and no artist last"
+        );
     }
 
     #[test]

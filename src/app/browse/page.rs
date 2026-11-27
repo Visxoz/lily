@@ -3,8 +3,8 @@ use std::{rc::Rc, time::Instant};
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 
 use crate::app::{
-    App,
-    browse::items::{card_item, track_item, track_row},
+    App, State,
+    browse::items::{bare_card, card_item, track_item, track_row},
     opaque, s,
 };
 use crate::{
@@ -21,6 +21,24 @@ pub(in crate::app) fn keep_library_state(page: &mut Page, live: Option<&Page>) {
     {
         header.saved = live.saved;
         header.subscribed = live.subscribed;
+    }
+}
+
+/// `page`'s sections with Library's albums by artist, should they show so:
+/// chosen, and all of them loaded. Applied as it shows, never to the cache.
+pub(in crate::app) fn albums_in_order(state: &State, page: &Page) -> Option<Vec<Section>> {
+    (state.route == Route::Library && state.settings.albums_by_artist && !page.albums_cut_short)
+        .then(|| {
+            let mut sections = page.sections.clone();
+            api::sort_by_artist(&mut sections);
+            sections
+        })
+}
+
+/// Library's albums past YouTube's first page load only to be put in order.
+pub(in crate::app) fn drop_albums_rest_unless(page: &mut Page, by_artist: bool) {
+    if !by_artist && matches!(page.more, Some(api::More::Albums(_))) {
+        page.more = None;
     }
 }
 
@@ -43,8 +61,20 @@ pub(in crate::app) fn track_list_page(
             mode: QueueMode::Section,
             numbered: false,
         }],
-        more: None,
+        ..Default::default()
     })
+}
+
+/// Grids longer than this hold art only near the screen. About what the
+/// artwork cache's 32 MB holds of card covers at 150% scale (some 270 KB
+/// each), so a shorter one holds no more than the cache already may.
+const LAZY_GRID: usize = 120;
+
+/// A lazy grid's cards from `first` up to `end` are near the screen; those
+/// past a quarter as many again either side let go of their art.
+fn grid_keeps(first: usize, end: usize) -> std::ops::Range<usize> {
+    let margin = end.saturating_sub(first) / 4;
+    first.saturating_sub(margin)..end + margin
 }
 
 /// About a page of search results: rows this near a paused list's end ask
@@ -68,6 +98,20 @@ fn card_edge(layout: &CardLayout) -> u32 {
     match layout {
         CardLayout::Top => images::TOP,
         _ => images::CARD,
+    }
+}
+
+/// Whether a card section is a grid long enough to be lazy.
+fn is_lazy(cards: &[api::Card], layout: &CardLayout) -> bool {
+    *layout == CardLayout::Grid && cards.len() > LAZY_GRID
+}
+
+/// A card as its section shows it: a lazy grid's without art until near the screen.
+fn section_card(card: &api::Card, layout: &CardLayout, lazy: bool) -> CardItem {
+    if lazy {
+        bare_card(card)
+    } else {
+        card_item(card, card_edge(layout))
     }
 }
 
@@ -154,12 +198,17 @@ impl Built {
                 }
             }
             Section::Cards { cards, layout, .. } => {
-                let edge = card_edge(layout);
+                let lazy = is_lazy(cards, layout);
                 let model = ModelRc::new(VecModel::from(
-                    cards.iter().map(|c| card_item(c, edge)).collect::<Vec<_>>(),
+                    cards
+                        .iter()
+                        .map(|c| section_card(c, layout, lazy))
+                        .collect::<Vec<_>>(),
                 ));
-                self.card_art
-                    .push((model.clone(), card_thumbs(cards), edge));
+                if !lazy {
+                    self.card_art
+                        .push((model.clone(), card_thumbs(cards), card_edge(layout)));
+                }
                 self.rows.push(RowItem {
                     kind: match layout {
                         CardLayout::Carousel => RowKind::Carousel,
@@ -168,6 +217,7 @@ impl Built {
                         CardLayout::Top => RowKind::Top,
                     },
                     cards: model,
+                    lazy_art: lazy,
                     section: section_index as i32,
                     ..Default::default()
                 });
@@ -181,11 +231,14 @@ impl App {
         let (generation, route) = {
             let state = self.state.borrow();
             // Applied as it shows rather than as it loads, so a cached Home
-            // also has what played since.
+            // also has what played since, and the cache keeps YouTube's order.
             if state.route == Route::Home && state.signed_in {
                 // Local files have no radio to play after them there.
                 let recent = state.history.heard().filter(|t| !t.is_local());
                 api::add_recent(&mut page.sections, recent);
+            }
+            if let Some(sections) = albums_in_order(&state, &page) {
+                page.sections = sections;
             }
             (state.page_generation, state.route.clone())
         };
@@ -260,6 +313,8 @@ impl App {
         // rows were scrolled through a reset and can open it part-way down.
         let in_place = restore.is_some() && self.rows_route.borrow().as_ref() == Some(&route);
         self.row_art.reset();
+        // Rows are made afresh either way, and lazy grids say where they are as they are.
+        self.grid_lines.borrow_mut().clear();
         if in_place {
             self.rows().set_vec(rows);
         } else {
@@ -329,7 +384,9 @@ impl App {
             let state = self.state.borrow();
             for row in self.rows().iter() {
                 match state.page.sections.get(row.section as usize) {
-                    Some(Section::Cards { cards, layout, .. }) if row.cards.row_count() > 0 => {
+                    Some(Section::Cards { cards, layout, .. })
+                        if row.cards.row_count() > 0 && !row.lazy_art =>
+                    {
                         card_art.push((row.cards, card_thumbs(cards), card_edge(layout)));
                     }
                     Some(Section::Tracks { tracks, .. }) if row.kind == RowKind::Songs => {
@@ -341,6 +398,7 @@ impl App {
         }
         self.load_header_art(thumb, edge, generation);
         self.load_art(card_art, track_art, generation);
+        self.load_grids();
     }
 
     pub(in crate::app) fn find_row(&self, kind: RowKind) -> Option<usize> {
@@ -432,6 +490,87 @@ impl App {
         );
     }
 
+    /// Lazy grid `row` has cards `first` up to `end` near the screen.
+    pub(in crate::app) fn on_grid_lines(self: &Rc<Self>, row: i32, first: i32, end: i32) {
+        let [row, first, end] = [row, first, end].map(|n| usize::try_from(n).unwrap_or(0));
+        self.grid_lines.borrow_mut().insert(row, (first, end));
+        // Said during Slint's layout pass, so the model is changed once it ends.
+        let app = Rc::clone(self);
+        slint::Timer::single_shot(std::time::Duration::ZERO, move || app.load_grid(row));
+    }
+
+    fn load_grids(self: &Rc<Self>) {
+        let rows: Vec<usize> = self.grid_lines.borrow().keys().copied().collect();
+        for row in rows {
+            self.load_grid(row);
+        }
+    }
+
+    /// Loads the art of lazy grid `row`'s cards near the screen and lets go of
+    /// that of those far off; none while the window is hidden.
+    fn load_grid(self: &Rc<Self>, row: usize) {
+        let Some((first, end)) = self.grid_lines.borrow().get(&row).copied() else {
+            return;
+        };
+        let Some(item) = self.rows().row_data(row).filter(|r| r.lazy_art) else {
+            return;
+        };
+        if self.art_hidden.get() {
+            return;
+        }
+        let (cards, keeps) = (item.cards, grid_keeps(first, end));
+        let mut wanted = Vec::new();
+        for i in 0..cards.row_count() {
+            let Some(mut card) = cards.row_data(i) else {
+                continue;
+            };
+            let has_art = card.art.size().width > 0;
+            if has_art && !keeps.contains(&i) {
+                card.art = Image::default();
+                cards.set_row_data(i, card);
+            } else if !has_art && (first..end).contains(&i) {
+                wanted.push((i, card.id));
+            }
+        }
+        let (generation, wanted) = {
+            let state = self.state.borrow();
+            let Some(Section::Cards { cards: page, .. }) =
+                state.page.sections.get(item.section as usize)
+            else {
+                return;
+            };
+            let thumb = |i: usize| page.get(i).and_then(|c| c.thumb.clone());
+            let wanted: Vec<_> = wanted
+                .into_iter()
+                .map(|(i, id)| (i, id, thumb(i)))
+                .collect();
+            (state.page_generation, wanted)
+        };
+        for (i, id, url) in wanted {
+            // Skipped once scrolled far past before its turn comes.
+            let still = move |app: &Rc<Self>| {
+                on_page(generation)(app)
+                    && app
+                        .grid_lines
+                        .borrow()
+                        .get(&row)
+                        .is_some_and(|&(first, end)| grid_keeps(first, end).contains(&i))
+            };
+            let cards = cards.clone();
+            self.load_image_while(url, images::CARD, still, move |app, image| {
+                // Only on that card, should a reorder have moved another in.
+                if still(app)
+                    && let Some(mut card) = cards
+                        .row_data(i)
+                        .filter(|c| c.id == id && c.art.size().width == 0)
+                {
+                    card.art = image;
+                    cards.set_row_data(i, card);
+                }
+            });
+        }
+    }
+
     /// Fetches the page's next step if it has one, or waits for its rows to
     /// near the end should it page on scroll.
     fn follow_more(self: &Rc<Self>, route: Route, generation: u64, more: bool) {
@@ -483,6 +622,7 @@ impl App {
                 let current = app.state.borrow().page_generation == generation;
                 {
                     let state = app.state.borrow();
+                    drop_albums_rest_unless(&mut page, state.settings.albums_by_artist);
                     let live = if current {
                         Some(&state.page)
                     } else {
@@ -540,39 +680,82 @@ impl App {
         }
     }
 
-    /// Shows tracks or cards added to the first section, and sections after
-    /// the shown ones.
-    fn extend_page(self: &Rc<Self>, page: Page, route: Route, generation: u64) {
-        let (shown_tracks, shown_cards, shown_sections) = {
+    /// Shows tracks or cards added to the shown sections, Library's albums put
+    /// in order once all are in, and sections after the shown ones.
+    fn extend_page(self: &Rc<Self>, mut page: Page, route: Route, generation: u64) {
+        let (shown_tracks, shown_sections, grown) = {
             let state = self.state.borrow();
-            let (tracks, cards) = match state.page.sections.first() {
-                Some(Section::Tracks { tracks, .. }) => (tracks.len(), 0),
-                Some(Section::Cards { cards, .. }) => (0, cards.len()),
-                None => (0, 0),
+            let ordered = albums_in_order(&state, &page)
+                .map(|sections| page.sections = sections)
+                .is_some();
+            let tracks = match state.page.sections.first() {
+                Some(Section::Tracks { tracks, .. }) => tracks.len(),
+                _ => 0,
             };
-            (tracks, cards, state.page.sections.len())
+            // Each card list that changed, with how many it showed, or none once
+            // put in order, as every card moves.
+            let grown: Vec<(usize, Option<usize>)> = state
+                .page
+                .sections
+                .iter()
+                .zip(&page.sections)
+                .enumerate()
+                .filter_map(|(i, sections)| match sections {
+                    (Section::Cards { cards: old, .. }, Section::Cards { cards: new, .. })
+                        if old != new =>
+                    {
+                        Some((i, (!ordered).then_some(old.len())))
+                    }
+                    _ => None,
+                })
+                .collect();
+            (tracks, state.page.sections.len(), grown)
         };
 
-        // A kind's search results grow their one grid.
-        if let Some(Section::Cards { cards, layout, .. }) = page.sections.first()
-            && cards.len() > shown_cards
-            && shown_sections > 0
-            && let Some(row) = self
-                .rows()
-                .iter()
-                .find(|r| r.section == 0 && r.cards.row_count() > 0)
-            && let Some(model) = row.cards.as_any().downcast_ref::<VecModel<CardItem>>()
-        {
-            let edge = card_edge(layout);
-            model.extend(cards[shown_cards..].iter().map(|c| card_item(c, edge)));
+        let mut lazy_rows = Vec::new();
+        for (i, shown) in grown {
+            let Section::Cards { cards, layout, .. } = &page.sections[i] else {
+                continue;
+            };
+            let Some((at, mut row)) = (0..self.rows().row_count()).find_map(|r| {
+                let row = self.rows().row_data(r)?;
+                (row.section == i as i32 && row.cards.row_count() > 0).then_some((r, row))
+            }) else {
+                continue;
+            };
+            let lazy = is_lazy(cards, layout);
+            // Grown long, a grid lets go of what is far off once it says where it is.
+            let mut changed = row.lazy_art != lazy;
+            row.lazy_art = lazy;
             let mut urls = card_thumbs(cards);
-            // Those shown have theirs.
-            urls[..shown_cards].fill(None);
-            self.load_art(
-                vec![(row.cards.clone(), urls, edge)],
-                Vec::new(),
-                generation,
-            );
+            // Grown in place, so the cards shown and what lies below stay put.
+            if let Some(shown) = shown.filter(|&shown| shown <= cards.len())
+                && let Some(model) = row.cards.as_any().downcast_ref::<VecModel<CardItem>>()
+            {
+                model.extend(cards[shown..].iter().map(|c| section_card(c, layout, lazy)));
+                // Those shown have theirs.
+                urls[..shown].fill(None);
+            } else {
+                let items: Vec<_> = cards
+                    .iter()
+                    .map(|c| section_card(c, layout, lazy))
+                    .collect();
+                row.cards = ModelRc::new(VecModel::from(items));
+                changed = true;
+            }
+            let model = row.cards.clone();
+            if changed {
+                self.rows().set_row_data(at, row);
+            }
+            if lazy {
+                lazy_rows.push(at);
+            } else {
+                self.load_art(
+                    vec![(model, urls, card_edge(layout))],
+                    Vec::new(),
+                    generation,
+                );
+            }
         }
 
         if let Some(Section::Tracks {
@@ -613,6 +796,10 @@ impl App {
 
         let more = page.more.is_some();
         self.state.borrow_mut().page = page;
+        // Once the page holds their cards' artwork.
+        for row in lazy_rows {
+            self.load_grid(row);
+        }
         self.header_changed();
         self.follow_more(route, generation, more);
     }
@@ -677,5 +864,11 @@ mod tests {
         assert_eq!(greeting_for(18), "Good evening");
         assert_eq!(greeting_for(23), "Good night");
         assert_eq!(greeting_for(2), "Good night");
+    }
+
+    #[test]
+    fn lazy_grids_keep_art_a_little_past_the_screen() {
+        assert_eq!(grid_keeps(80, 160), 60..180);
+        assert_eq!(grid_keeps(0, 40), 0..50, "none before the first");
     }
 }

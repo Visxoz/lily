@@ -45,13 +45,20 @@ pub(in crate::app) fn track_row(
 }
 
 pub(in crate::app) fn card_item(card: &Card, edge: u32) -> CardItem {
+    CardItem {
+        art: images::cached_or_empty(card.thumb.as_deref(), edge),
+        ..bare_card(card)
+    }
+}
+
+/// `card_item` without its art, for a lazy grid to load once near the screen.
+pub(in crate::app) fn bare_card(card: &Card) -> CardItem {
     let tint = card.color.map_or(slint::Color::default(), opaque);
     CardItem {
         kind: s(card.kind.as_str()),
         id: s(&card.id),
         title: s(&card.title),
         subtitle: s(&card.subtitle),
-        art: images::cached_or_empty(card.thumb.as_deref(), edge),
         round: card.kind == CardKind::Artist,
         tint,
         ..Default::default()

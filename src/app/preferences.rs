@@ -58,6 +58,7 @@ impl App {
                 .map_or(-1, |i| i as i32),
         );
         ui.set_close_to_tray(settings.close_to_tray);
+        ui.set_albums_by_artist(settings.albums_by_artist);
         ui.set_sidebar_collapsed(settings.sidebar_collapsed);
         ui.set_check_updates(settings.check_updates);
         ui.set_equaliser(settings.equaliser);
