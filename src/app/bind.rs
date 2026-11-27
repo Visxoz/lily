@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use super::{App, updates::up_to_date_status};
 use crate::{
     Api as ApiGlobal, AppWindow, LyricsExtras,
-    api::{Rating, Route},
+    api::{Rating, Route, SearchKind},
     audio::eq,
     scrobbling::Service,
     settings::{Accent, Look, Quality},
@@ -327,6 +327,9 @@ impl App {
             .download_queued(&id, remove));
         on!(api.on_header_action, |app, action| app
             .header_action(&action));
+        on!(api.on_filter_search, |app, index| app.filter_search(index));
+        let filters: Vec<SharedString> = SearchKind::filter_labels().map(Into::into).collect();
+        api.set_search_filters(ModelRc::from(Rc::new(VecModel::from(filters))));
         on!(api.on_card_action, |app, action, kind, id| app
             .card_action(&action, &kind, &id));
         on!(api.on_rate, |app, id, rating| app

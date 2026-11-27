@@ -14,9 +14,11 @@ export component PageRow {
     in property <bool> home;
     property <length> inner: root.content-width - 2 * Theme.page-padding;
     // Only rows on screen exist, so each asks for its own artwork, and again
-    // once the list hands it another row.
-    property <string> art-key: root.data.kind == RowKind.track && !root.data.numbered && root.data.track.art.width == 0
-        ? "\{root.index}/\{root.data.track.id}" : "";
+    // once the list hands it another row; with art too while `more-paused`,
+    // as an ask tells Rust a row nearing the end is on screen.
+    property <bool> has-art: root.data.track.art.width > 0;
+    property <string> art-key: root.data.kind == RowKind.track && !root.data.numbered && (!root.has-art || Api.more-paused)
+        ? "\{root.index}/\{root.data.track.id}" + (root.has-art ? "/art" : "") : "";
     width: root.content-width;
     height: Rows.height(root.data, root.inner);
 

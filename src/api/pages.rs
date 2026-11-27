@@ -1,15 +1,15 @@
 use rustypipe::{
     client::RustyPipeQuery,
-    model::{AlbumType, MusicGenreItem, MusicItem},
-    param::AlbumOrder,
+    model::{AlbumType, MusicGenreItem, MusicItem, TrackItem, traits::FromYtItem},
+    param::{AlbumOrder, search_filter::MusicSearchFilter},
 };
 
 use super::{
     Api, Card, CardKind, CardLayout, Header, More, MoreTracks, PLAYLIST_LIMIT, Page, QueueMode,
-    Result, Route, SHELF_SONGS, Section,
+    Result, Route, SHELF_SONGS, SearchKind, Section,
     convert::{
         CARD_THUMB, HEADER_THUMB, ROW_THUMB, album_card, album_type, artist_card, artist_refs,
-        card_section, genre_card, join_artists, pick_thumb, playlist_card, playlist_tracks,
+        card_section, genre_card, join_artists, pick_thumb, playlist_card, playlist_tracks, track,
         track_section, tracks,
     },
     err,
@@ -40,6 +40,53 @@ fn sections_page(sections: Vec<Section>) -> Page {
     }
 }
 
+/// Lower than songs', as a grid holds all its art, outside the cache's budget.
+const SEARCH_CARDS: usize = 60;
+
+fn no_results(query: &str) -> String {
+    format!("No results for \u{201c}{query}\u{201d}")
+}
+
+fn search_filter(kind: SearchKind) -> MusicSearchFilter {
+    match kind {
+        SearchKind::Songs => MusicSearchFilter::Tracks,
+        SearchKind::Videos => MusicSearchFilter::Videos,
+        SearchKind::Artists => MusicSearchFilter::Artists,
+        SearchKind::Albums => MusicSearchFilter::Albums,
+        // YouTube Music's own, as the combined page's.
+        SearchKind::Playlists => MusicSearchFilter::YtmPlaylists,
+    }
+}
+
+/// An artist, album or playlist as its card; anything else has none.
+fn music_card(item: MusicItem) -> Option<Card> {
+    match item {
+        MusicItem::Artist(a) => Some(artist_card(a)),
+        MusicItem::Album(a) => Some(album_card(a)),
+        MusicItem::Playlist(p) => Some(playlist_card(p)),
+        _ => None,
+    }
+}
+
+/// Adds one kind's search results to its section, and says whether they added
+/// any and there is room for more, so a batch adding none ends the list.
+fn add_results(section: &mut Section, items: Vec<MusicItem>) -> bool {
+    fn grow<T>(list: &mut Vec<T>, new: impl Iterator<Item = T>, cap: usize) -> bool {
+        let before = list.len();
+        list.extend(new);
+        (before + 1..cap).contains(&list.len())
+    }
+    let items = items.into_iter();
+    match section {
+        Section::Tracks { tracks, .. } => grow(
+            tracks,
+            items.filter_map(TrackItem::from_ytm_item).map(track),
+            PLAYLIST_LIMIT,
+        ),
+        Section::Cards { cards, .. } => grow(cards, items.filter_map(music_card), SEARCH_CARDS),
+    }
+}
+
 impl Api {
     pub async fn page(&self, route: &Route, signed_in: bool) -> Result<Page> {
         match route {
@@ -48,7 +95,8 @@ impl Api {
             Route::Library => self.library().await,
             Route::History => self.history().await,
             Route::Downloads | Route::LocalFiles => Err("only on this PC".into()),
-            Route::Search(query) => self.search(query).await,
+            Route::Search(query, None) => self.search(query).await,
+            Route::Search(query, Some(kind)) => self.search_kind(query, *kind).await,
             Route::Album(id) => self.album(id).await,
             Route::Playlist(id) => self.playlist(id).await,
             Route::Artist(id) => self.artist(id).await,
@@ -299,12 +347,10 @@ impl Api {
         let songs = songs.map_err(err)?;
 
         let mut sections = Vec::new();
-        let top = match main.ok().and_then(|m| m.items.items.into_iter().next()) {
-            Some(MusicItem::Artist(a)) => Some(artist_card(a)),
-            Some(MusicItem::Album(a)) => Some(album_card(a)),
-            Some(MusicItem::Playlist(p)) => Some(playlist_card(p)),
-            _ => None,
-        };
+        let top = main
+            .ok()
+            .and_then(|m| m.items.items.into_iter().next())
+            .and_then(music_card);
         if let Some(card) = top {
             sections.extend(card_section("Top result", vec![card], CardLayout::Top));
         }
@@ -351,9 +397,43 @@ impl Api {
             CardLayout::Carousel,
         ));
         if sections.is_empty() {
-            return Err(format!("No results for \u{201c}{query}\u{201d}"));
+            return Err(no_results(query));
         }
         Ok(sections_page(sections))
+    }
+
+    /// One kind's results alone: its first page now, the rest through
+    /// `complete`.
+    async fn search_kind(&self, query: &str, kind: SearchKind) -> Result<Page> {
+        let mut results = self
+            .q()
+            .music_search::<MusicItem, _>(query, Some(search_filter(kind)))
+            .await
+            .map_err(err)?
+            .items;
+        let mut section = if kind.songs() {
+            Section::Tracks {
+                title: String::new(),
+                tracks: Vec::new(),
+                mode: QueueMode::Radio,
+                numbered: false,
+            }
+        } else {
+            Section::Cards {
+                title: String::new(),
+                cards: Vec::new(),
+                layout: CardLayout::Grid,
+            }
+        };
+        let room = add_results(&mut section, std::mem::take(&mut results.items));
+        if section.is_empty() {
+            return Err(no_results(query));
+        }
+        Ok(Page {
+            header: None,
+            sections: vec![section],
+            more: (room && results.ctoken.is_some()).then_some(More::Search(results)),
+        })
     }
 
     pub(super) async fn album(&self, id: &str) -> Result<Page> {
@@ -483,6 +563,28 @@ impl Api {
                     header.meta = meta;
                 }
             }
+            // A page of one kind of search result at a time: songs as their
+            // rows near the end, cards as each arrives.
+            Some(More::Search(mut results)) => match results.extend(self.q()).await {
+                Ok(_) => {
+                    let batch = std::mem::take(&mut results.items);
+                    if let Some(section) = page.sections.first_mut()
+                        && add_results(section, batch)
+                        && results.ctoken.is_some()
+                    {
+                        page.more = Some(More::Search(results));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("could not load more search results: {e}");
+                    whole = false;
+                    // Songs ask again as rows next near the end; cards follow on
+                    // at once, so would retry in a loop.
+                    if let Some(Section::Tracks { .. }) = page.sections.first() {
+                        page.more = Some(More::Search(results));
+                    }
+                }
+            },
             Some(More::Shelves(mut feed)) => {
                 if let Err(e) = feed.next(&self.user_q()).await {
                     log::warn!("could not load more of the home feed: {e}");

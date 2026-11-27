@@ -424,6 +424,12 @@ export component AppWindow inherits Window {
             if root.full-player {
                 return reject;
             }
+            // A search's filters in turn, as a browser's tabs; once a press.
+            if ev.modifiers.control && (ev.text == Key.Tab || ev.text == Key.Backtab) && !ev.repeat
+                && Api.search-filter >= 0 && !top-bar.search-focused && !root.dialog-open {
+                Api.filter-search(mod(Api.search-filter + (ev.modifiers.shift || ev.text == Key.Backtab ? -1 : 1), Api.search-filters.length));
+                return accept;
+            }
             if ev.modifiers.control && (ev.text == "f" || ev.text == "k" || ev.text == "l") {
                 top-bar.focus-input();
                 return accept;

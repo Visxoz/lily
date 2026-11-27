@@ -196,6 +196,11 @@ export component Pill inherits Rectangle {
     height: 32px;
     width: text.preferred-width + 28px;
     border-radius: 16px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.active;
+    accessible-action-default => { root.clicked(); }
     background: root.active ? Theme.text : touch.has-hover ? Theme.ink.with-alpha(0.15) : Theme.hover;
     animate background { duration: Theme.fast; }
     text := Text {
@@ -211,10 +216,12 @@ export component Pill inherits Rectangle {
     }
 }
 
-export component PillGroup inherits HorizontalLayout {
+/// One line, unless set to wrap.
+export component PillGroup inherits FlexboxLayout {
     in property <[string]> labels;
     in property <int> current;
     callback picked(index: int);
+    flex-wrap: no-wrap;
     spacing: 6px;
     for label[i] in root.labels: Pill {
         label: label;

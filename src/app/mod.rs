@@ -195,6 +195,7 @@ impl App {
                 page_generation: 0,
                 page_edits: HashMap::new(),
                 restore_scroll: None,
+                more_paused: None,
                 queue,
                 queue_generation: 0,
                 playback: Playback::default(),

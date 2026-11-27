@@ -1,6 +1,6 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Instant};
 
-use slint::{Image, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 
 use crate::app::{
     App,
@@ -8,7 +8,7 @@ use crate::app::{
     opaque, s,
 };
 use crate::{
-    CardItem, RowItem, RowKind, TrackItem,
+    Api as ApiGlobal, CardItem, RowItem, RowKind, TrackItem,
     api::{self, CardLayout, Header, Page, QueueMode, Route, Section, Track},
     downloads::Downloads,
     images,
@@ -46,6 +46,10 @@ pub(in crate::app) fn track_list_page(
         more: None,
     })
 }
+
+/// About a page of search results: rows this near a paused list's end ask
+/// for its next.
+const MORE_AHEAD: usize = 20;
 
 /// Long enough for a frame or two to lay out a page's first rows.
 const RESEEK_AFTER: std::time::Duration = std::time::Duration::from_millis(60);
@@ -280,9 +284,7 @@ impl App {
 
         self.load_header_art(header_thumb, header_edge, generation);
         self.load_art(card_art, track_art, generation);
-        if more {
-            self.complete_page(route, generation);
-        }
+        self.follow_more(route, generation, more);
     }
 
     fn load_header_art(self: &Rc<Self>, thumb: Option<String>, edge: u32, generation: u64) {
@@ -378,12 +380,14 @@ impl App {
         }
     }
 
-    /// Loads the artwork of track row `row`, asked for by the row once on screen.
+    /// Loads the artwork of track row `row`, asked for by the row once on
+    /// screen, and the page's next step should the row near its end.
     pub(in crate::app) fn load_row_art(self: &Rc<Self>, row: usize) {
+        self.more_near(row);
         let Some(item) = self
             .rows()
             .row_data(row)
-            .filter(|r| r.kind == RowKind::Track)
+            .filter(|r| r.kind == RowKind::Track && r.track.art.size().width == 0)
         else {
             return;
         };
@@ -428,6 +432,38 @@ impl App {
         );
     }
 
+    /// Fetches the page's next step if it has one, or waits for its rows to
+    /// near the end should it page on scroll.
+    fn follow_more(self: &Rc<Self>, route: Route, generation: u64, more: bool) {
+        let paused = more && route.pages_on_scroll();
+        // Kept through each step, so a failed one waits for the next ask.
+        self.ui().global::<ApiGlobal>().set_more_paused(paused);
+        if paused {
+            self.state.borrow_mut().more_paused = Some(generation);
+        } else if more {
+            self.complete_page(route, generation);
+        }
+    }
+
+    /// Fetches the paused page's next step once row `row`, on screen, is
+    /// within `MORE_AHEAD` of its end; hidden, the row is held and asks again.
+    fn more_near(self: &Rc<Self>, row: usize) {
+        if self.art_hidden.get() {
+            return;
+        }
+        let (route, generation) = {
+            let mut state = self.state.borrow_mut();
+            if state.more_paused != Some(state.page_generation)
+                || row + MORE_AHEAD < self.rows().row_count()
+            {
+                return;
+            }
+            state.more_paused = None;
+            (state.route.clone(), state.page_generation)
+        };
+        self.complete_page(route, generation);
+    }
+
     /// Fetches one step of `Page.more`; the next follows once it is on screen.
     fn complete_page(self: &Rc<Self>, route: Route, generation: u64) {
         let (page, account, edits) = {
@@ -458,15 +494,19 @@ impl App {
                     if current {
                         app.complete_home(&page, shown, whole);
                     }
-                } else if !whole {
+                } else if !whole && page.more.is_none() {
                     // Cut short, it would play and show as whole; the next visit asks again.
                     app.state.borrow_mut().page_cache.remove(&route);
                 } else {
                     // Edited since it was asked, the cached copy is newer.
                     let mut state = app.state.borrow_mut();
                     let edited = state.page_edits.get(&route).copied() != edits;
-                    if !edited && let Some((cached, _)) = state.page_cache.get_mut(&route) {
+                    if !edited && let Some((cached, at)) = state.page_cache.get_mut(&route) {
                         *cached = page.clone();
+                        // Never refreshed, it stays fresh from its last step.
+                        if route.pages_on_scroll() {
+                            *at = Instant::now();
+                        }
                     }
                 }
                 if current {
@@ -500,16 +540,40 @@ impl App {
         }
     }
 
-    /// Shows tracks added to the first section, and sections after the shown ones.
+    /// Shows tracks or cards added to the first section, and sections after
+    /// the shown ones.
     fn extend_page(self: &Rc<Self>, page: Page, route: Route, generation: u64) {
-        let (shown_tracks, shown_sections) = {
+        let (shown_tracks, shown_cards, shown_sections) = {
             let state = self.state.borrow();
-            let tracks = match state.page.sections.first() {
-                Some(Section::Tracks { tracks, .. }) => tracks.len(),
-                _ => 0,
+            let (tracks, cards) = match state.page.sections.first() {
+                Some(Section::Tracks { tracks, .. }) => (tracks.len(), 0),
+                Some(Section::Cards { cards, .. }) => (0, cards.len()),
+                None => (0, 0),
             };
-            (tracks, state.page.sections.len())
+            (tracks, cards, state.page.sections.len())
         };
+
+        // A kind's search results grow their one grid.
+        if let Some(Section::Cards { cards, layout, .. }) = page.sections.first()
+            && cards.len() > shown_cards
+            && shown_sections > 0
+            && let Some(row) = self
+                .rows()
+                .iter()
+                .find(|r| r.section == 0 && r.cards.row_count() > 0)
+            && let Some(model) = row.cards.as_any().downcast_ref::<VecModel<CardItem>>()
+        {
+            let edge = card_edge(layout);
+            model.extend(cards[shown_cards..].iter().map(|c| card_item(c, edge)));
+            let mut urls = card_thumbs(cards);
+            // Those shown have theirs.
+            urls[..shown_cards].fill(None);
+            self.load_art(
+                vec![(row.cards.clone(), urls, edge)],
+                Vec::new(),
+                generation,
+            );
+        }
 
         if let Some(Section::Tracks {
             tracks, numbered, ..
@@ -550,9 +614,7 @@ impl App {
         let more = page.more.is_some();
         self.state.borrow_mut().page = page;
         self.header_changed();
-        if more {
-            self.complete_page(route, generation);
-        }
+        self.follow_more(route, generation, more);
     }
 
     /// Shows the page's header as it now is, its song count for one.
@@ -597,7 +659,7 @@ fn route_tint(route: &Route) -> slint::Color {
         Route::Home => return slint::Color::default(),
         Route::Explore => 0x1e3264,
         Route::Library => 0x3d1f5c,
-        Route::Search(_) => 0x2a2a2a,
+        Route::Search(..) => 0x2a2a2a,
         _ => 0x333333,
     };
     opaque(rgb)

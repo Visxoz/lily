@@ -16,6 +16,12 @@ const PAGE_FRESH_FOR: Duration = Duration::from_secs(5 * 60);
 const PAGE_CACHE_SIZE: usize = 12;
 const SUGGEST_DELAY: Duration = Duration::from_millis(150);
 
+/// Whether an expired copy shows while it reloads: not one half-loaded, whose
+/// continuation expired too, nor one paging on scroll, as refreshing fetches all.
+fn shows_expired(route: &Route, page: &Page) -> bool {
+    page.more.is_none() && !route.pages_on_scroll()
+}
+
 impl App {
     pub(in crate::app) fn navigate(self: &Rc<Self>, route: Route, push: bool) {
         let ui = self.ui();
@@ -54,17 +60,27 @@ impl App {
                 Route::Home => "trending",
                 Route::Explore => "chips",
                 Route::Library => "grid",
-                Route::Search(_) => "search",
+                Route::Search(_, None) => "search",
+                Route::Search(_, Some(kind)) if kind.songs() => "songs",
+                Route::Search(..) => "cards",
             }
             .into(),
         );
         ui.set_page_loading(true);
+        let global = ui.global::<ApiGlobal>();
         // Until the page loads and says whether it is one.
-        ui.global::<ApiGlobal>().set_own_playlist(false);
+        global.set_own_playlist(false);
+        global.set_more_paused(false);
         ui.set_page_error(SharedString::new());
         match &route {
-            Route::Search(query) => ui.set_search_text(query.into()),
-            _ => ui.set_search_text(SharedString::new()),
+            Route::Search(query, kind) => {
+                ui.set_search_text(query.into());
+                global.set_search_filter(api::SearchKind::filter(*kind));
+            }
+            _ => {
+                ui.set_search_text(SharedString::new());
+                global.set_search_filter(-1);
+            }
         }
 
         if route == Route::Library && !signed_in {
@@ -122,7 +138,6 @@ impl App {
     }
 
     /// The cached copy of `route`, whether it is fresh, and when it was cached.
-    /// One left half-loaded is none once expired, as its continuation has too.
     pub(in crate::app) fn cached_page(&self, route: &Route) -> Option<(Page, bool, Instant)> {
         self.state
             .borrow()
@@ -130,7 +145,7 @@ impl App {
             .get(route)
             .and_then(|(page, at)| {
                 let fresh = at.elapsed() < PAGE_FRESH_FOR;
-                (fresh || page.more.is_none()).then(|| (page.clone(), fresh, *at))
+                (fresh || shows_expired(route, page)).then(|| (page.clone(), fresh, *at))
             })
     }
 
@@ -325,8 +340,8 @@ impl App {
         let mut state = self.state.borrow_mut();
         let cache = &mut state.page_cache;
         // Expired pages are kept to show while they reload, but not those
-        // left half-loaded, which `navigate` loads afresh.
-        cache.retain(|_, (page, at)| at.elapsed() < PAGE_FRESH_FOR || page.more.is_none());
+        // `navigate` loads afresh.
+        cache.retain(|kept, (copy, at)| at.elapsed() < PAGE_FRESH_FOR || shows_expired(kept, copy));
         if !cache.contains_key(&route)
             && cache.len() >= PAGE_CACHE_SIZE
             && let Some(oldest) = cache
@@ -417,10 +432,24 @@ impl App {
             return;
         }
         let recorded = self.state.borrow_mut().searches.record(query);
-        self.navigate(Route::Search(query.to_owned()), true);
+        // Each new search starts on All.
+        self.navigate(Route::Search(query.to_owned(), None), true);
         if recorded {
             self.recent_searches_changed();
         }
+    }
+
+    /// Shows the search on screen through the filter at `index`, in its place,
+    /// so Back leaves the search rather than stepping through its filters.
+    pub(in crate::app) fn filter_search(self: &Rc<Self>, index: i32) {
+        let kind = api::SearchKind::from_filter(index);
+        let route = match &self.state.borrow().route {
+            Route::Search(query, shown) if *shown != kind => Route::Search(query.clone(), kind),
+            _ => return,
+        };
+        // Back's scroll for a page still loading isn't this one's.
+        self.state.borrow_mut().restore_scroll = None;
+        self.navigate(route, false);
     }
 
     pub(in crate::app) fn forget_search(&self, query: &str) {

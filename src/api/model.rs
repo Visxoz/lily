@@ -1,5 +1,5 @@
 pub use rustypipe::model::PlaylistPrivacy;
-use rustypipe::model::{TrackItem, paginator::Paginator};
+use rustypipe::model::{MusicItem, TrackItem, paginator::Paginator};
 
 use super::convert::{HEADER_THUMB, join_artists, resize_thumb};
 
@@ -154,6 +154,13 @@ impl Section {
             Self::Tracks { title, .. } | Self::Cards { title, .. } => title,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Tracks { tracks, .. } => tracks.is_empty(),
+            Self::Cards { cards, .. } => cards.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -213,6 +220,8 @@ pub enum More {
     Tracks(MoreTracks),
     /// The home feed's further shelves.
     Shelves(super::home_feed::Feed),
+    /// The rest of one kind of search result.
+    Search(Paginator<MusicItem>),
 }
 
 #[derive(Debug, Clone)]
@@ -232,11 +241,55 @@ pub enum Route {
     Downloads,
     /// Songs in the folders the user added.
     LocalFiles,
-    Search(String),
+    /// Every kind's top results, or one kind's full list.
+    Search(String, Option<SearchKind>),
     Album(String),
     Playlist(String),
     Artist(String),
     Genre(String),
+}
+
+/// One kind of search result, in the order of the search page's filters
+/// after All.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchKind {
+    Songs,
+    Videos,
+    Artists,
+    Albums,
+    Playlists,
+}
+
+impl SearchKind {
+    /// Each kind in its declared order, as `filter` numbers them, by its label.
+    const ALL: [(Self, &'static str); 5] = [
+        (Self::Songs, "Songs"),
+        (Self::Videos, "Videos"),
+        (Self::Artists, "Artists"),
+        (Self::Albums, "Albums"),
+        (Self::Playlists, "Playlists"),
+    ];
+
+    /// The search page's filters: All, then each kind.
+    pub fn filter_labels() -> impl Iterator<Item = &'static str> {
+        std::iter::once("All").chain(Self::ALL.iter().map(|&(_, label)| label))
+    }
+
+    /// The kind the filter at `index` shows, none for All at 0.
+    pub fn from_filter(index: i32) -> Option<Self> {
+        let i = usize::try_from(index.checked_sub(1)?).ok()?;
+        Self::ALL.get(i).map(|&(kind, _)| kind)
+    }
+
+    /// The filter showing `kind`.
+    pub fn filter(kind: Option<Self>) -> i32 {
+        kind.map_or(0, |k| k as i32 + 1)
+    }
+
+    /// Songs and videos list as songs; the rest as cards.
+    pub fn songs(self) -> bool {
+        matches!(self, Self::Songs | Self::Videos)
+    }
 }
 
 /// A song's, album's, playlist's or artist's address on YouTube Music, by
@@ -262,6 +315,12 @@ impl Route {
             Route::Artist(id) => link("artist", id),
             _ => None,
         }
+    }
+
+    /// A kind of search's songs, hundreds long, whose next page waits for the
+    /// rows to near the end.
+    pub fn pages_on_scroll(&self) -> bool {
+        matches!(self, Route::Search(_, Some(kind)) if kind.songs())
     }
 
     pub fn nav_name(&self) -> &'static str {
@@ -301,6 +360,33 @@ mod tests {
         );
         assert_eq!(link("genre", "x"), None);
         assert_eq!(Route::Home.link(), None);
-        assert_eq!(Route::Search("x".into()).link(), None);
+        assert_eq!(Route::Search("x".into(), None).link(), None);
+        assert_eq!(
+            Route::Search("x".into(), Some(SearchKind::Songs)).link(),
+            None
+        );
+    }
+
+    #[test]
+    fn search_filters_map_to_kinds_and_back() {
+        assert_eq!(SearchKind::from_filter(0), None);
+        assert_eq!(SearchKind::filter(None), 0);
+        for (i, (kind, _)) in SearchKind::ALL.into_iter().enumerate() {
+            let index = i as i32 + 1;
+            assert_eq!(SearchKind::from_filter(index), Some(kind));
+            assert_eq!(SearchKind::filter(Some(kind)), index);
+        }
+        assert_eq!(SearchKind::from_filter(6), None);
+        assert_eq!(SearchKind::from_filter(-1), None);
+    }
+
+    #[test]
+    fn only_a_search_of_songs_or_videos_pages_on_scroll() {
+        let search = |kind| Route::Search("x".into(), kind);
+        assert!(search(Some(SearchKind::Songs)).pages_on_scroll());
+        assert!(search(Some(SearchKind::Videos)).pages_on_scroll());
+        assert!(!search(Some(SearchKind::Albums)).pages_on_scroll());
+        assert!(!search(None).pages_on_scroll());
+        assert!(!Route::Playlist("PLx".into()).pages_on_scroll());
     }
 }

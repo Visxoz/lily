@@ -154,6 +154,9 @@ pub(super) struct State {
     /// fetched from before one doesn't put back what it changed.
     pub(super) page_edits: HashMap<Route, u64>,
     pub(super) restore_scroll: Option<f32>,
+    /// The page, by its generation, whose next step waits for its rows to
+    /// near their end.
+    pub(super) more_paused: Option<u64>,
     pub(super) queue: Queue<Track>,
     /// Bumped as the queue is replaced or cleared, so tracks fetched for one
     /// never join the next.

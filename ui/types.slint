@@ -112,6 +112,15 @@ export global Api {
     /// Downloads a song in the queue, or removes its download.
     callback download(id: string, remove: bool);
     callback header-action(action: string);
+    /// Shows the search through the filter at `index` in `search-filters`.
+    callback filter-search(index: int);
+    /// `SearchKind::filter_labels`.
+    in property <[string]> search-filters;
+    /// The search page's filter, or -1 off it.
+    in property <int> search-filter: -1;
+    /// The page's next step waits for a row near its end, so rows with art
+    /// ask too.
+    in property <bool> more-paused;
     /// Likes (1) or dislikes (2) a song, or takes that back if it had it;
     /// 0 removes either.
     callback rate(id: string, rating: int);
