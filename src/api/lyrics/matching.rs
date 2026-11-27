@@ -1,17 +1,15 @@
 //! Whether another site's song and lyrics are the ones YouTube is playing.
 
-use std::{borrow::Cow, collections::HashMap, ptr};
+use std::{borrow::Cow, collections::HashMap};
 
 use icu_normalizer::{
     ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed,
     properties::CanonicalCombiningClassMapBorrowed,
 };
-use windows_sys::Win32::Globalization::{
-    LCMAP_SIMPLIFIED_CHINESE, LCMapStringEx, LOCALE_NAME_INVARIANT,
-};
+use windows_sys::Win32::Globalization::LCMAP_SIMPLIFIED_CHINESE;
 
 use super::Lyrics;
-use crate::api::Track;
+use crate::api::{Track, convert::map_string};
 
 const BARE_CREDITS: [&str; 5] = ["feat", "feat.", "ft", "ft.", "featuring"];
 const PACKAGING: [&str; 14] = [
@@ -218,37 +216,10 @@ pub(super) fn simplified(text: &str) -> Cow<'_, str> {
     {
         return Cow::Borrowed(text);
     }
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let Ok(len) = i32::try_from(wide.len()) else {
-        return Cow::Borrowed(text);
-    };
-    let map = |out: &mut [u16]| {
-        let Ok(capacity) = i32::try_from(out.len()) else {
-            return 0;
-        };
-        // SAFETY: `wide` holds `len` units and `out` `capacity`, both borrowed
-        // through the call, which writes at most `capacity` units and none when
-        // it is 0; the locale is a static null-terminated string.
-        unsafe {
-            LCMapStringEx(
-                LOCALE_NAME_INVARIANT,
-                LCMAP_SIMPLIFIED_CHINESE,
-                wide.as_ptr(),
-                len,
-                out.as_mut_ptr(),
-                capacity,
-                ptr::null(),
-                ptr::null(),
-                0,
-            )
-        }
-    };
-    let mut out = vec![0; usize::try_from(map(&mut [])).unwrap_or(0)];
-    let written = usize::try_from(map(&mut out)).unwrap_or(0);
-    if written == 0 || written > out.len() {
+    let mut out: Vec<u16> = map_string(text, LCMAP_SIMPLIFIED_CHINESE, true);
+    if out.is_empty() {
         return Cow::Borrowed(text);
     }
-    out.truncate(written);
     // Windows leaves these common ones be, where ICU, which the iOS app uses,
     // simplifies them.
     for unit in &mut out {

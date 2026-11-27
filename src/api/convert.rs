@@ -6,7 +6,7 @@ use rustypipe::model::{
 };
 use windows_sys::Win32::Globalization::{
     LCMAP_SORTKEY, LCMapStringEx, LINGUISTIC_IGNORECASE, LINGUISTIC_IGNOREDIACRITIC,
-    NORM_IGNOREWIDTH, SORT_DIGITSASNUMBERS,
+    LOCALE_NAME_INVARIANT, NORM_IGNOREWIDTH, SORT_DIGITSASNUMBERS,
 };
 
 use super::{
@@ -137,9 +137,8 @@ pub(super) fn saved_albums(sections: &mut [Section]) -> Option<&mut Vec<Card>> {
     })
 }
 
-/// Library's albums by artist, then title, as Windows sorts names for the
-/// user's language, whatever the case or accents and numbers by value, with
-/// those by no one named last and ties as they came.
+/// Library's albums by artist, then title, as Windows sorts the user's
+/// language; those by no one named last, ties as they came.
 pub fn sort_by_artist(sections: &mut [Section]) {
     if let Some(cards) = saved_albums(sections) {
         cards.sort_by_cached_key(|c| {
@@ -152,6 +151,22 @@ pub fn sort_by_artist(sections: &mut [Section]) {
 /// `text`'s sort key for the user's language, whose bytes compare as Windows
 /// compares the text; empty should Windows refuse it.
 fn sort_key(text: &str) -> Vec<u8> {
+    let flags = LCMAP_SORTKEY
+        | LINGUISTIC_IGNORECASE
+        | LINGUISTIC_IGNOREDIACRITIC
+        | NORM_IGNOREWIDTH
+        | SORT_DIGITSASNUMBERS;
+    map_string(text, flags, false)
+}
+
+/// What `map_string` fills: a sort key's bytes, or UTF-16 units.
+pub(super) trait MapUnit: Copy + Default {}
+impl MapUnit for u8 {}
+impl MapUnit for u16 {}
+
+/// `text` mapped by Windows with `flags`, for the invariant locale or the
+/// user's; empty should Windows refuse it.
+pub(super) fn map_string<T: MapUnit>(text: &str, flags: u32, invariant: bool) -> Vec<T> {
     let wide: Vec<u16> = text.encode_utf16().collect();
     let Ok(len) = i32::try_from(wide.len()) else {
         return Vec::new();
@@ -159,22 +174,23 @@ fn sort_key(text: &str) -> Vec<u8> {
     if len == 0 {
         return Vec::new();
     }
-    let flags = LCMAP_SORTKEY
-        | LINGUISTIC_IGNORECASE
-        | LINGUISTIC_IGNOREDIACRITIC
-        | NORM_IGNOREWIDTH
-        | SORT_DIGITSASNUMBERS;
-    let map = |out: &mut [u8]| {
-        let Ok(capacity) = i32::try_from(out.len()) else {
+    let locale = if invariant {
+        LOCALE_NAME_INVARIANT
+    } else {
+        ptr::null()
+    };
+    let unit = if flags & LCMAP_SORTKEY == 0 { 2 } else { 1 };
+    let map = |out: &mut [T]| {
+        let Ok(capacity) = i32::try_from(size_of_val(out) / unit) else {
             return 0;
         };
-        // SAFETY: `wide` holds `len` units and `out` `capacity` bytes, both
-        // borrowed through the call, which with `LCMAP_SORTKEY` counts the
-        // destination in bytes, writes at most `capacity` of them and none
-        // when it is 0; a null locale is the user's.
+        // SAFETY: `wide` holds `len` units and `out` `capacity` of what the
+        // flags count (bytes for a sort key, else units), both borrowed through
+        // the call, which writes at most `capacity` and none when it is 0. The
+        // locale is null (the user's) or a static null-terminated string.
         unsafe {
             LCMapStringEx(
-                ptr::null(),
+                locale,
                 flags,
                 wide.as_ptr(),
                 len,
@@ -186,15 +202,18 @@ fn sort_key(text: &str) -> Vec<u8> {
             )
         }
     };
-    let mut out = vec![0; usize::try_from(map(&mut [])).unwrap_or(0)];
+    let mut out = vec![T::default(); usize::try_from(map(&mut [])).unwrap_or(0)];
     let written = usize::try_from(map(&mut out)).unwrap_or(0);
+    if written > out.len() {
+        return Vec::new();
+    }
     out.truncate(written);
     out
 }
 
 /// From `album_card`'s "Album • Artist • 2024": what lies between the type,
 /// which always leads, and any year.
-// shortcut: a four-digit artist without a year reads as the year; an artist on Card would tell them apart.
+// shortcut: a four-digit artist without a year reads as one; Card has no artist.
 fn album_artist(subtitle: &str) -> &str {
     let is_year = |s: &str| s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit());
     let Some((_, rest)) = subtitle.split_once(" • ") else {
@@ -301,13 +320,8 @@ mod tests {
     #[test]
     fn orders_albums_by_artist_then_title() {
         let card = |kind, id: &str, title: &str, subtitle: &str| Card {
-            kind,
-            id: id.to_owned(),
-            title: title.to_owned(),
             subtitle: subtitle.to_owned(),
-            thumb: None,
-            color: None,
-            track: None,
+            ..Card::bare(kind, id, title)
         };
         let album =
             |id: &str, subtitle: &str| card(CardKind::Album, id, &format!("Album {id}"), subtitle);

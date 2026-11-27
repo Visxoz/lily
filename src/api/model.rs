@@ -9,12 +9,13 @@ pub struct ArtistRef {
     pub name: String,
 }
 
-/// Fields missing default, as pins keep tracks across versions.
+/// Fields past `id` default, as pins keep tracks across versions.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
 pub struct Track {
     pub id: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub artists: Vec<ArtistRef>,
     pub album: Option<(String, String)>,
     pub duration: Option<u32>,
@@ -22,6 +23,7 @@ pub struct Track {
     pub track_nr: Option<u16>,
     /// A music video, which may have a song version: audio only, and with
     /// Premium formats.
+    #[serde(default)]
     pub video: bool,
     /// The entry's own ID in the account's playlist it came from, which
     /// removing or moving it takes. Never saved, as it means nothing away
@@ -145,9 +147,8 @@ impl Card {
         }
     }
 
-    /// An album, playlist or artist page as a card, for pinning; none for
-    /// other pages, or one without a title yet. Its art is the header's at
-    /// the card's size: square, so an artist's banner gives its centre.
+    /// An album, playlist or artist page as a card to pin, once it has a
+    /// title; the header's art, squared, so a banner gives its centre.
     pub fn pinning(route: &Route, header: &Header) -> Option<Self> {
         let (kind, id) = match route {
             Route::Album(id) => (CardKind::Album, id),
@@ -266,9 +267,8 @@ pub struct Page {
     /// What the page still has to fetch after it shows; `Api::complete`
     /// fetches a step of it at a time.
     pub more: Option<More>,
-    /// Library's albums are only the first part of the list: the rest is still
-    /// to come, was left unasked, or a step for it failed. Ordering them would
-    /// mislead.
+    /// Library's albums are only part of the list (the rest still coming,
+    /// unasked or failed), so ordering them would mislead.
     pub albums_cut_short: bool,
 }
 
@@ -469,6 +469,19 @@ mod tests {
             None,
             "not loaded yet"
         );
+    }
+
+    #[test]
+    fn tracks_read_without_their_other_fields_but_never_without_an_id() {
+        let track: Track = serde_json::from_str(r#"{"id": "v1"}"#).unwrap();
+        assert_eq!(
+            track,
+            Track {
+                id: "v1".into(),
+                ..Default::default()
+            }
+        );
+        assert!(serde_json::from_str::<Track>("{}").is_err());
     }
 
     #[test]

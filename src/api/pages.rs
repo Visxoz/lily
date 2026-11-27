@@ -70,11 +70,6 @@ fn music_card(item: MusicItem) -> Option<Card> {
 /// Adds one kind's search results to its section, and says whether they added
 /// any and there is room for more, so a batch adding none ends the list.
 fn add_results(section: &mut Section, items: Vec<MusicItem>) -> bool {
-    fn grow<T>(list: &mut Vec<T>, new: impl Iterator<Item = T>, cap: usize) -> bool {
-        let before = list.len();
-        list.extend(new);
-        (before + 1..cap).contains(&list.len())
-    }
     let items = items.into_iter();
     match section {
         Section::Tracks { tracks, .. } => grow(
@@ -84,6 +79,13 @@ fn add_results(section: &mut Section, items: Vec<MusicItem>) -> bool {
         ),
         Section::Cards { cards, .. } => grow(cards, items.filter_map(music_card), SEARCH_CARDS),
     }
+}
+
+/// Adds `new` up to `cap`, and says whether it added any with room left.
+fn grow<T>(list: &mut Vec<T>, new: impl Iterator<Item = T>, cap: usize) -> bool {
+    let before = list.len();
+    list.extend(new.take(cap.saturating_sub(before)));
+    (before + 1..cap).contains(&list.len())
 }
 
 impl Api {
@@ -443,7 +445,7 @@ impl Api {
         Ok(Page {
             header: None,
             sections: vec![section],
-            more: (room && results.ctoken.is_some()).then_some(More::Search(results)),
+            more: (room && !results.is_exhausted()).then_some(More::Search(results)),
             ..Default::default()
         })
     }
@@ -583,7 +585,7 @@ impl Api {
                     let batch = std::mem::take(&mut results.items);
                     if let Some(section) = page.sections.first_mut()
                         && add_results(section, batch)
-                        && results.ctoken.is_some()
+                        && !results.is_exhausted()
                     {
                         page.more = Some(More::Search(results));
                     }
@@ -646,12 +648,13 @@ impl Api {
         // An alias's page redirects to the artist's own ID, but its discography
         // is already the artist's, so it is asked again only should it fail or
         // add nothing.
-        let adds = matches!(&discography, Ok(all) if all.len() > artist.albums.len());
-        let discography = if artist.id == id || adds {
-            discography
-        } else {
-            q.music_artist_albums(&artist.id, None, Some(AlbumOrder::Recency))
-                .await
+        let discography = match discography {
+            Ok(all) if all.len() > artist.albums.len() => Ok(all),
+            _ if artist.id != id => {
+                q.music_artist_albums(&artist.id, None, Some(AlbumOrder::Recency))
+                    .await
+            }
+            other => other,
         };
         match discography {
             Ok(all) if all.len() > artist.albums.len() => artist.albums = all,
@@ -742,5 +745,19 @@ impl Api {
             sections,
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn results_stop_at_the_cap() {
+        let mut list = vec![0, 1];
+        assert!(grow(&mut list, 2..4, 5), "added, with room left");
+        assert!(!grow(&mut list, 4..14, 5), "full");
+        assert_eq!(list, [0, 1, 2, 3, 4], "never past the cap");
+        assert!(!grow(&mut list, 5..6, 5), "nothing added");
     }
 }
