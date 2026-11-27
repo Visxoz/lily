@@ -222,6 +222,8 @@ impl App {
                 if page.albums_cut_short && app.state.borrow().settings.albums_by_artist {
                     return;
                 }
+                // Put in order for the comparison, so shown without sorting again.
+                let mut sorted = None;
                 let (ours, swap) = {
                     let state = app.state.borrow();
                     // Gone, as after a like or signing out, it is to load
@@ -249,8 +251,14 @@ impl App {
                         && !home
                         && (state.page.header != page.header || {
                             // Against the fresh copy as it would show.
-                            let ordered = super::page::albums_in_order(&state, &page);
-                            state.page.sections != *ordered.as_ref().unwrap_or(&page.sections)
+                            let shown_as = if super::page::orders_albums(&state, &page) {
+                                let mut sections = page.sections.clone();
+                                api::sort_by_artist(&mut sections);
+                                &*sorted.insert(sections)
+                            } else {
+                                &page.sections
+                            };
+                            state.page.sections != *shown_as
                         });
                     (ours, swap)
                 };
@@ -276,15 +284,25 @@ impl App {
                 if ours {
                     app.cache_page(route, page.clone());
                 }
-                {
-                    let mut state = app.state.borrow_mut();
-                    state.restore_scroll = Some(app.ui().get_page_scroll());
-                    // Rows move, so art still on its way to their old places is dropped.
-                    state.page_generation += 1;
+                app.prepare_reshow();
+                match sorted {
+                    Some(sections) => {
+                        page.sections = sections;
+                        app.show_arranged(page);
+                    }
+                    None => app.show_page(page),
                 }
-                app.show_page(page);
             },
         );
+    }
+
+    /// Before the page on screen shows again where it is scrolled. Rows move,
+    /// so art still on its way to their old places is dropped.
+    pub(in crate::app) fn prepare_reshow(&self) {
+        let scroll = self.ui().get_page_scroll();
+        let mut state = self.state.borrow_mut();
+        state.restore_scroll = Some(scroll);
+        state.page_generation += 1;
     }
 
     /// Should the feed fail before any of it shows, the last whole one stands
@@ -382,10 +400,8 @@ impl App {
         }
     }
 
-    /// A cached Library holding only part of its albums loads again for the
-    /// rest once they go by artist, and turned off asks for no more; one on
-    /// screen shows again in place, while one loading takes the setting as it
-    /// arrives.
+    /// A cached Library with part of its albums loads the rest once they go by
+    /// artist, and asks no more once not; one on screen shows again in place.
     pub(in crate::app) fn set_albums_by_artist(self: &Rc<Self>, on: bool) {
         self.update_settings(|s| s.albums_by_artist = on);
         let ui = self.ui();
@@ -406,19 +422,15 @@ impl App {
             if !shown || (!on && state.page.albums_cut_short) {
                 return;
             }
-            state.restore_scroll = Some(ui.get_page_scroll());
             state
                 .page_cache
                 .get(&Route::Library)
                 .map(|(page, _)| page.clone())
         };
+        self.prepare_reshow();
         match cached {
             // Even expired, so the setting alone asks for nothing.
-            Some(page) => {
-                // Rows move, so art still on its way to their old places is dropped.
-                self.state.borrow_mut().page_generation += 1;
-                self.show_page(page);
-            }
+            Some(page) => self.show_page(page),
             None => self.navigate(Route::Library, false),
         }
     }

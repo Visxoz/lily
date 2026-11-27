@@ -229,16 +229,10 @@ impl App {
 
     /// Shows the Downloads page again where it was scrolled, should it be open.
     fn refresh_downloads_page(self: &Rc<Self>) {
-        let scroll = self.ui().get_page_scroll();
-        {
-            let mut state = self.state.borrow_mut();
-            if state.route != Route::Downloads {
-                return;
-            }
-            state.restore_scroll = Some(scroll);
-            // Rows move, so art still on its way to their old places is dropped.
-            state.page_generation += 1;
+        if self.state.borrow().route != Route::Downloads {
+            return;
         }
+        self.prepare_reshow();
         self.show_downloads();
     }
 
