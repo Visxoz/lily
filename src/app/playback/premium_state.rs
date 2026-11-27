@@ -183,6 +183,16 @@ pub(super) async fn premium_player(
         }
         return Ok(Arc::clone(player));
     }
+    // Set only once the saved player was found missing, which only a load
+    // that fills the slot changes.
+    if shared
+        .load_failed
+        .lock()
+        .unwrap()
+        .is_some_and(|at| at.elapsed() < PREMIUM_BACKOFF)
+    {
+        return Err("waiting before preparing the player again".into());
+    }
     // At launch the saved player plays while YouTube's version is checked;
     // a stale one costs the songs it solves meanwhile Premium, as they retry free.
     if let Some(saved) = premium::saved_player().await {
@@ -191,14 +201,6 @@ pub(super) async fn premium_player(
         check_behind(shared, &saved, true);
         *slot = Some(Arc::clone(&saved));
         return Ok(saved);
-    }
-    if shared
-        .load_failed
-        .lock()
-        .unwrap()
-        .is_some_and(|at| at.elapsed() < PREMIUM_BACKOFF)
-    {
-        return Err("waiting before preparing the player again".into());
     }
     match premium::load_current().await {
         Ok(player) => {

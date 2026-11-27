@@ -109,16 +109,11 @@ fn mark(cut: &mut Vec<usize>, i: usize) -> bool {
 static FAILED: Mutex<[Option<Instant>; CLIENT_COUNT]> = Mutex::new([None; CLIENT_COUNT]);
 const DEMOTED_FOR: Duration = Duration::from_secs(10 * 60);
 
-/// After a pass that `played` with one client, those before it whose
-/// request failed (`failing` holds each client asked, and whether its
-/// request rather than its answer failed) are demoted and it is not. An
-/// answer refusing the song, as age-gated or not on that client, may be the
-/// song's alone. A pass where all fail says nothing of any one.
-fn demote(failed: &mut [Option<Instant>], failing: &[(usize, bool)], played: usize, now: Instant) {
-    for &(i, request_failed) in failing {
-        if request_failed {
-            failed[i] = Some(now);
-        }
+/// After a pass that `played` with one client, demotes the clients before it
+/// whose request failed, and not it.
+fn demote(failed: &mut [Option<Instant>], failing: &[usize], played: usize, now: Instant) {
+    for &i in failing {
+        failed[i] = Some(now);
     }
     failed[played] = None;
 }
@@ -165,8 +160,8 @@ pub struct ResolvedStream {
     /// Its first bytes, once `warm` has them, for its download to start from.
     #[serde(skip)]
     pub head: Arc<OnceLock<Vec<u8>>>,
-    /// The quality it was resolved at and whether the Premium path was
-    /// wanted, which a copy kept to play again is filed under.
+    /// The quality it was resolved at and whether the Premium path settled
+    /// it, which a copy kept to play again is filed under.
     #[serde(skip)]
     pub asked: Option<(crate::settings::Quality, bool)>,
 }
@@ -190,21 +185,21 @@ pub async fn resolve(
     for i in order {
         let client = &CLIENTS[i];
         let result = resolve_with(client, video_id, visitor_data, max_kbps, itag).await;
-        let request_failed = result.is_err();
-        match result.and_then(std::convert::identity) {
+        // An answer refusing the song, as age-gated or not on that client,
+        // may be the song's alone, so only a failed request demotes.
+        if result.is_err() {
+            failing.push(i);
+        }
+        match result.flatten() {
             Ok(stream) => {
-                if !failing.is_empty() {
+                if first_error.is_some() {
                     log::info!("{video_id}: the {} client served the stream", client.name);
-                    // A client without one format isn't broken.
-                    if itag.is_none() {
-                        demote(&mut *FAILED.lock().unwrap(), &failing, i, Instant::now());
-                    }
+                    demote(&mut *FAILED.lock().unwrap(), &failing, i, Instant::now());
                 }
                 return Ok(stream);
             }
             Err(e) => {
                 log::debug!("{video_id}: {} client: {e}", client.name);
-                failing.push((i, request_failed));
                 first_error.get_or_insert(e);
             }
         }
@@ -333,18 +328,11 @@ mod tests {
         );
 
         let mut failed = [None, Some(t), None];
-        demote(&mut failed, &[(0, true)], 1, t + minute);
+        demote(&mut failed, &[0], 1, t + minute);
         assert_eq!(
             failed,
             [Some(t + minute), None, None],
             "the one that played is not demoted"
-        );
-        let mut failed = [None; CLIENT_COUNT];
-        demote(&mut failed, &[(0, false), (1, true)], 2, t);
-        assert_eq!(
-            failed,
-            [None, Some(t), None],
-            "an answer refusing the song demotes nothing"
         );
     }
 
@@ -366,7 +354,7 @@ mod tests {
             let mut whole = 0;
             for client in CLIENTS {
                 let resolved = resolve_with(client, VIDEO, &visitor, None, None).await;
-                match resolved.and_then(std::convert::identity) {
+                match resolved.flatten() {
                     Ok(stream) => match probe(&stream).await {
                         Ok(()) => {
                             eprint!(

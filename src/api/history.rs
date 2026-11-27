@@ -92,8 +92,8 @@ fn login(cookie: &str) -> Option<u64> {
 }
 
 /// What a play's report can reuse of `json`, a web player answer asked with
-/// `cookie`, with its `tracking`. Not an answer YouTube gave
-/// signed out, as nothing watches that request's session.
+/// `cookie`, with its `tracking`. Not an answer YouTube gave signed out:
+/// rustypipe's sign-in watch never sees this request, so it is checked here.
 fn entry(
     video_id: &str,
     cookie: &str,

@@ -78,12 +78,8 @@ pub async fn saved_player() -> Option<Player> {
     tokio::task::spawn_blocking(read).await.ok()?
 }
 
-/// The cut-down player version `id`, from the cache when it holds that one.
+/// Fetches, cuts down and checks player version `id`, then saves it.
 pub async fn load_player(id: String) -> Result<Player, String> {
-    if let Some(cached) = saved_player().await.filter(|p| p.id == id) {
-        return Ok(cached);
-    }
-
     let started = Instant::now();
     let source = text(&format!(
         "https://www.youtube.com/s/player/{id}/player_ias.vflset/en_US/base.js"
@@ -121,7 +117,7 @@ pub async fn load_player(id: String) -> Result<Player, String> {
         trimmed.as_millis()
     ));
     if let Ok(json) = serde_json::to_vec(&player) {
-        let _ = std::fs::write(cache_path(), json);
+        tokio::task::spawn_blocking(move || std::fs::write(cache_path(), json));
     }
     Ok(player)
 }
