@@ -57,8 +57,9 @@ impl Api {
     }
 
     /// Asks Google for fresh session cookies, as an open YouTube tab does:
-    /// nothing else renews the app's own session.
-    pub async fn rotate_cookies(&self) -> Result<()> {
+    /// nothing else renews the app's own session. `false` when the stored
+    /// login is no longer the one renewed, as after signing out or in meanwhile.
+    pub async fn rotate_cookies(&self) -> Result<bool> {
         let Some(cookie) = self.cookie() else {
             return Err("not signed in".into());
         };
@@ -86,7 +87,8 @@ impl Api {
             log::info!("renewed the sign-in");
         }
         self.save_session().await;
-        Ok(())
+        // A 200 that set nothing new still renews, so the login is compared.
+        Ok(same_login(&cookie, self.cookie().as_deref()))
     }
 
     /// Saves the session's cookie with what responses have changed in it.
@@ -118,6 +120,12 @@ const ROTATE_URL: &str = "https://accounts.youtube.com/RotateCookies";
 /// YouTube calls it from a frame on accounts.youtube.com.
 const ROTATE_ORIGIN: &str = "https://accounts.youtube.com";
 const ROTATE_BODY: &str = r#"[000,"-0000000000000000000"]"#;
+
+/// Whether the cookie `stored` now signs in as the login `sent` named.
+fn same_login(sent: &str, stored: Option<&str>) -> bool {
+    use crate::streams::premium::sapisid;
+    sapisid(sent).is_some_and(|login| stored.and_then(sapisid) == Some(login))
+}
 
 const GUIDE_PHOTO: &str = "/userProfile/accountPhoto/thumbnails";
 const MENU_PHOTO: &str = "/actions/0/openPopupAction/popup/multiPageMenuRenderer/header/activeAccountHeaderRenderer/accountPhoto/thumbnails";
@@ -207,6 +215,18 @@ mod tests {
         );
         assert!(!primary("{}"), "signed out");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_renewal_counts_only_for_the_login_still_stored() {
+        let sent = "SID=a; SAPISID=one";
+        assert!(same_login(sent, Some("SID=b; SAPISID=one")), "rotated");
+        assert!(
+            !same_login(sent, Some("SID=a; SAPISID=two")),
+            "signed in again"
+        );
+        assert!(!same_login(sent, None), "signed out");
+        assert!(!same_login("SID=a", Some("SID=a")), "no login named");
     }
 
     #[test]

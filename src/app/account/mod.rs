@@ -11,7 +11,7 @@ use slint::{ComponentHandle, Image, Model, SharedString, Timer, TimerMode};
 use super::{App, browse::items::card_item, now_playing::lyrics::PassCheck};
 use crate::{
     Api as ApiGlobal, CardItem,
-    api::{self, Api, Card, Route},
+    api::{Api, Card, Route},
     google_sign_in::{self, SignIn, Site},
     images, settings,
 };
@@ -58,6 +58,8 @@ impl App {
                             s.account_photo = None;
                         });
                         app.warm_premium();
+                        // Fresh cookies need no renewal for the first interval.
+                        app.renew_sign_in_after(ROTATE_COOKIES_EVERY);
                         ui.global::<ApiGlobal>().set_signed_in(true);
                         ui.set_sign_in_open(false);
                         if let Some(id) = app.playing_id() {
@@ -238,12 +240,11 @@ impl App {
     pub(super) fn list_library(self: &Rc<Self>) {
         let (items, art): (Vec<CardItem>, Vec<_>) = {
             let state = self.state.borrow();
-            let pinned = &state.settings.pinned;
-            pinned_first(&state.library, pinned)
+            pinned_first(&state.library, &state.settings.pinned)
                 .into_iter()
-                .map(|card| {
+                .map(|(card, pin)| {
                     let item = CardItem {
-                        pinned: pinned.has(card.kind, &card.id),
+                        pinned: pin.is_some(),
                         ..card_item(card, images::ROW)
                     };
                     // Art the cache already held is in the item.
@@ -293,7 +294,7 @@ impl App {
                 // check of a run can beat.
                 match api.cookie_valid().await {
                     Some(false) => {
-                        let _ = renew(&api).await;
+                        renew(&api).await;
                         api.cookie_valid().await
                     }
                     valid => valid,
@@ -394,12 +395,11 @@ impl App {
         });
     }
 
-    /// Keeps the session from going stale or being revoked, renewing it once
-    /// `ROTATE_COOKIES_EVERY` has passed since it last was, in any run, as
-    /// RotateCookies answers renewals close together with 429s.
+    /// Renews the session `ROTATE_COOKIES_EVERY` after its last renewal in any
+    /// run, as RotateCookies refuses renewals close together; signing in rearms it.
     pub(super) fn renew_sign_in_when_due(self: &Rc<Self>) {
         if !self.state.borrow().signed_in {
-            return self.renew_sign_in_after(ROTATE_COOKIES_EVERY);
+            return;
         }
         let api = self.api.clone();
         self.spawn(
@@ -409,7 +409,7 @@ impl App {
                     return Some(due);
                 }
                 // A failure waits the whole interval too, so the timer never spins.
-                let _ = renew(&api).await;
+                renew(&api).await;
                 Some(ROTATE_COOKIES_EVERY)
             },
             // `None` only should the work panic.
@@ -438,25 +438,25 @@ impl App {
     }
 }
 
-/// Keeps the time only of a renewal Google took, for the next to wait on.
-async fn renew(api: &Api) -> api::Result<()> {
-    let renewed = api.rotate_cookies().await;
-    match &renewed {
-        Ok(()) => settings::save_renewal(),
+/// Keeps the time only of a renewal Google took for the login still stored,
+/// for the next to wait on.
+async fn renew(api: &Api) {
+    match api.rotate_cookies().await {
+        Ok(true) => settings::save_renewal(),
+        Ok(false) => {}
         Err(e) => log::warn!("could not renew the sign-in: {e}"),
     }
-    renewed
 }
 
 /// `cards` with the pinned ones first, in the order they were pinned, then
-/// the rest in theirs. A pin not among them is passed over.
-fn pinned_first<'a>(cards: &'a [Card], pins: &settings::Pins) -> Vec<&'a Card> {
-    let mut sorted: Vec<&Card> = cards.iter().collect();
-    sorted.sort_by_cached_key(|card| {
-        (pins.cards().iter())
-            .position(|p| p.kind == card.kind && p.id == card.id)
-            .unwrap_or(usize::MAX)
-    });
+/// the rest in theirs, each with its place among the pins. A pin not among
+/// them is passed over.
+fn pinned_first<'a>(cards: &'a [Card], pins: &settings::Pins) -> Vec<(&'a Card, Option<usize>)> {
+    let mut sorted: Vec<_> = cards
+        .iter()
+        .map(|card| (card, pins.position(card.kind, &card.id)))
+        .collect();
+    sorted.sort_by_key(|&(_, pin)| pin.unwrap_or(usize::MAX));
     sorted
 }
 
@@ -477,10 +477,13 @@ mod tests {
         ] {
             pins.add(Card::bare(kind, id, ""));
         }
-        let order: Vec<&str> = pinned_first(&cards, &pins)
+        let order: Vec<(&str, Option<usize>)> = pinned_first(&cards, &pins)
             .iter()
-            .map(|c| c.id.as_str())
+            .map(|(c, pin)| (c.id.as_str(), *pin))
             .collect();
-        assert_eq!(order, ["d", "b", "a", "c"]);
+        assert_eq!(
+            order,
+            [("d", Some(0)), ("b", Some(3)), ("a", None), ("c", None)]
+        );
     }
 }

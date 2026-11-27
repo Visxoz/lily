@@ -59,7 +59,12 @@ impl Pins {
     }
 
     pub fn has(&self, kind: CardKind, id: &str) -> bool {
-        self.cards.iter().any(|c| c.kind == kind && c.id == id)
+        self.position(kind, id).is_some()
+    }
+
+    /// Its place among the pins, the first pinned at 0.
+    pub fn position(&self, kind: CardKind, id: &str) -> Option<usize> {
+        self.cards.iter().position(|c| c.kind == kind && c.id == id)
     }
 
     /// Pins `card` last, unless it is pinned already.
