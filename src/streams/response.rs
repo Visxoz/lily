@@ -13,8 +13,9 @@ pub(crate) struct PlayerResponse {
     playability_status: PlayabilityStatus,
     streaming_data: Option<StreamingData>,
     player_config: Option<PlayerConfig>,
-    /// For the play's report to reuse, so the answer is parsed once.
-    pub playback_tracking: Option<crate::api::Tracking>,
+    /// For the play's report to reuse, read only then, so a shape that
+    /// won't read costs that report rather than the song.
+    pub playback_tracking: Option<Box<serde_json::value::RawValue>>,
 }
 
 #[derive(Deserialize)]
@@ -320,6 +321,17 @@ mod tests {
             "https://a/251",
             "not the compressed variant"
         );
+    }
+
+    #[test]
+    fn plays_whatever_shape_the_tracking_takes() {
+        let json = response(OPUS).replacen(
+            '{',
+            r#"{"playbackTracking":{"videostatsPlaybackUrl":{},"videostatsDefaultFlushIntervalSeconds":2.5},"#,
+            1,
+        );
+        assert_eq!(parse(&json, UA, None, None).unwrap().url, "https://a/251");
+        assert!(parse_response(&json).unwrap().playback_tracking.is_some());
     }
 
     #[test]

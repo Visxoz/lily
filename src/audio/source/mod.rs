@@ -52,10 +52,10 @@ pub type Refresh = Box<dyn FnMut(bool) -> Result<Source, String> + Send>;
 static IN_USE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Holds a path in `IN_USE` until dropped.
-struct InUse(PathBuf);
+pub(crate) struct InUse(PathBuf);
 
 impl InUse {
-    fn new(path: &Path) -> Self {
+    pub(crate) fn new(path: &Path) -> Self {
         lock_in_use().push(path.to_owned());
         Self(path.to_owned())
     }

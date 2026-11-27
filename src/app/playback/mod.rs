@@ -199,9 +199,9 @@ impl App {
                         playback.prefetched.clear();
                     }
                     // The retry streams it, whether the copy kept failed or the
-                    // failing stream was kept whole; the next copy kept replaces
-                    // it, and one that wasn't at fault stays.
-                    playback.uncached = Some(id.clone());
+                    // failing stream was kept whole, and the copy is refused
+                    // until the next one kept replaces it.
+                    AudioCache::default().failed_to_play(&id);
                     // Mid-song, carry on from where the sound got to, read before
                     // `start_current` stops the player; at the very end, start over.
                     let position = self.player.position();

@@ -70,15 +70,17 @@ pub async fn load_current() -> Result<Player, String> {
     load_player(current_version().await?).await
 }
 
-/// The player last cut down and checked, whatever its version.
-pub fn saved_player() -> Option<Player> {
-    let bytes = std::fs::read(cache_path()).ok()?;
-    serde_json::from_slice(&bytes).ok()
+/// The player last cut down and checked, whatever its version. Read off
+/// Tokio's workers, as a sleeping disk can take a while.
+pub async fn saved_player() -> Option<Player> {
+    let read =
+        || -> Option<Player> { serde_json::from_slice(&std::fs::read(cache_path()).ok()?).ok() };
+    tokio::task::spawn_blocking(read).await.ok()?
 }
 
 /// The cut-down player version `id`, from the cache when it holds that one.
 pub async fn load_player(id: String) -> Result<Player, String> {
-    if let Some(cached) = saved_player().filter(|p| p.id == id) {
+    if let Some(cached) = saved_player().await.filter(|p| p.id == id) {
         return Ok(cached);
     }
 

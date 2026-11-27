@@ -163,13 +163,13 @@ async fn player_request(
     }
     let failed = format!("{} player request failed", client.name);
     let text = crate::http::text(request.body(body.to_string()), &failed).await?;
-    let mut response = streams::parse_response(&text)?;
+    let response = streams::parse_response(&text)?;
     // The stats URLs carry the client's name, which the report sends as WEB_REMIX.
     if keep_tracking
         && client.name == "WEB_REMIX"
         && let Some(cookie) = cookie
     {
-        let tracking = response.playback_tracking.take();
+        let tracking = response.playback_tracking.as_deref();
         crate::api::keep_tracking(video_id, cookie, &text, tracking);
     }
     Ok(response)

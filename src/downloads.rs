@@ -44,6 +44,13 @@ fn audio_path(id: &str, mime: &str) -> PathBuf {
     dir().join(format!("{id}.{extension}"))
 }
 
+/// Whether `id`'s audio is downloaded, in either format. Blocking.
+pub fn holds(id: &str) -> bool {
+    ["audio/webm", "audio/mp4"]
+        .into_iter()
+        .any(|mime| audio_path(id, mime).exists())
+}
+
 fn cover_path(id: &str) -> PathBuf {
     dir().join(format!("{id}.jpg"))
 }

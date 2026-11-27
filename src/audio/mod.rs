@@ -13,7 +13,7 @@ mod stereo;
 
 use std::{
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
@@ -25,6 +25,8 @@ use std::{
 use engine::Engine;
 use output::Output;
 use source::Download;
+#[cfg(test)]
+pub(crate) use source::InUse;
 pub use source::{Refresh, Source, in_use};
 
 pub const MIN_SPEED: f32 = 0.5;
@@ -74,8 +76,12 @@ pub enum Input {
 /// the download's thread.
 pub struct Keep {
     pub path: PathBuf,
-    pub kept: Box<dyn FnOnce() + Send>,
+    pub kept: Kept,
 }
+
+/// Handed the whole part beside `Keep::path`, moves it there, should it still
+/// be wanted. A part left where it is is deleted.
+pub type Kept = Box<dyn FnOnce(&Path) -> std::io::Result<()> + Send>;
 
 pub struct Opening {
     pub mime: String,

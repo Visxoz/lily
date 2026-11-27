@@ -9,6 +9,7 @@ use std::{
 
 use rustypipe::client::{ClientType, answered_signed_out};
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use url::Url;
 
 use super::{Api, Result, err};
@@ -19,10 +20,10 @@ struct Player {
     playback_tracking: Option<Tracking>,
 }
 
-/// A player answer's `playbackTracking`, which the Premium path's parse reads too.
+/// A player answer's `playbackTracking`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Tracking {
+struct Tracking {
     videostats_playback_url: Option<TrackingUrl>,
     videostats_watchtime_url: Option<TrackingUrl>,
     #[serde(default)]
@@ -91,7 +92,7 @@ fn login(cookie: &str) -> Option<u64> {
 }
 
 /// What a play's report can reuse of `json`, a web player answer asked with
-/// `cookie`, whose `tracking` its parse read. Not an answer YouTube gave
+/// `cookie`, with its `tracking`. Not an answer YouTube gave
 /// signed out, as nothing watches that request's session.
 fn entry(
     video_id: &str,
@@ -113,8 +114,10 @@ fn entry(
 }
 
 /// Keeps the tracking of the Premium path's answer for `video_id`, so the
-/// song's play is reported without asking for it again.
-pub fn keep_tracking(video_id: &str, cookie: &str, json: &str, tracking: Option<Tracking>) {
+/// song's play is reported without asking for it again. `tracking` is the
+/// answer's `playbackTracking` as its parse left it.
+pub fn keep_tracking(video_id: &str, cookie: &str, json: &str, tracking: Option<&RawValue>) {
+    let tracking = tracking.and_then(|raw| serde_json::from_str(raw.get()).ok());
     if let Some(entry) = entry(video_id, cookie, json, tracking, Instant::now()) {
         KEPT.lock().unwrap().keep(entry);
     }

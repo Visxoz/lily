@@ -77,15 +77,14 @@ impl Part {
 
     fn finish(mut self) {
         // Made now should the head have been all of it.
-        let renamed = self.file().map(|_| ()).and_then(|()| {
+        let kept = self.file().map(|_| ()).and_then(|()| {
             let (file, path) = self.open.take().expect("just made");
             // Closed first, as Windows renames no open file.
             drop(file);
-            std::fs::rename(&path.0, &self.keep.path)
+            (self.keep.kept)(&path.0)
         });
-        match renamed {
-            Ok(()) => (self.keep.kept)(),
-            Err(e) => log::debug!("could not keep a song played: {e}"),
+        if let Err(e) = kept {
+            log::debug!("could not keep a song played: {e}");
         }
     }
 }
@@ -483,10 +482,13 @@ mod tests {
         let dir = scratch("whole");
         let path = dir.join("a.audio");
         let (tx, kept) = std::sync::mpsc::channel();
+        let to = path.clone();
         let keep = Keep {
             path: path.clone(),
-            kept: Box::new(move || {
+            kept: Box::new(move |part| {
+                std::fs::rename(part, to)?;
                 let _ = tx.send(());
+                Ok(())
             }),
         };
         // All of it in its head, so nothing is asked of the network.
@@ -509,7 +511,7 @@ mod tests {
         let dir = scratch("cut");
         let keep = Keep {
             path: dir.join("a.audio"),
-            kept: Box::new(|| panic!("kept a stream cut off")),
+            kept: Box::new(|_| panic!("kept a stream cut off")),
         };
         let mut part = Part::new(keep, vec![7; 1000]);
         assert!(!dir.exists(), "nothing written before the stream goes on");

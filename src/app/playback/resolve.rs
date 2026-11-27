@@ -352,11 +352,7 @@ impl App {
         let held = prefetched
             .as_ref()
             .is_some_and(|s| self.player.holds(&s.url));
-        let (quality, uncached) = {
-            let mut state = self.state.borrow_mut();
-            let uncached = state.playback.uncached.take_if(|id| *id == video_id);
-            (state.settings.quality, uncached.is_some())
-        };
+        let quality = self.state.borrow().settings.quality;
         let resolver = self.resolver(video_id);
         let want_premium = resolver.want_premium;
         // An account taken as without Premium plays any copy kept, but one
@@ -370,15 +366,13 @@ impl App {
                 Some(stream) if held => return Ok(stream),
                 prefetched => prefetched,
             };
-            if !uncached {
-                let id = resolver.video_id.clone();
-                // Off Tokio's workers, as a sleeping disk can take a while.
-                let kept = tokio::task::spawn_blocking(move || {
-                    AudioCache::default().find(&id, quality, premium_copy)
-                });
-                if let Ok(Some(stream)) = kept.await {
-                    return Ok(stream);
-                }
+            let id = resolver.video_id.clone();
+            // Off Tokio's workers, as a sleeping disk can take a while.
+            let kept = tokio::task::spawn_blocking(move || {
+                AudioCache::default().find(&id, quality, premium_copy)
+            });
+            if let Ok(Some(stream)) = kept.await {
+                return Ok(stream);
             }
             match prefetched {
                 Some(stream) => Ok(stream),

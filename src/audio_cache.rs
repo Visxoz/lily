@@ -51,6 +51,19 @@ fn budget() -> u64 {
     BUDGET.load(Ordering::Relaxed)
 }
 
+/// Copies that failed to play this run, oldest first, each with its place in
+/// `FAILURES`, refused until a copy kept after is kept over them.
+static FAILED: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
+/// Counts failures, so the failing stream's own keep, should it finish after,
+/// lifts no refusal.
+static FAILURES: AtomicU64 = AtomicU64::new(0);
+/// Songs failing in a row stop playback well before this many.
+const FAILED_LIMIT: usize = 16;
+
+fn failed() -> MutexGuard<'static, Vec<(PathBuf, u64)>> {
+    FAILED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub struct AudioCache {
     dir: PathBuf,
 }
@@ -72,11 +85,14 @@ impl AudioCache {
         api::is_video_id(id).then(|| (path("audio"), path("json")))
     }
 
-    /// `id`'s sidecar and file, should the file be as long as it says.
-    /// One gone or cut short is deleted; another error may pass, so the
-    /// files stay.
+    /// `id`'s sidecar and file, should the file be as long as it says and
+    /// not have failed to play. One gone or cut short is deleted; another
+    /// error may pass, so the files stay.
     fn whole(&self, id: &str) -> Option<(Entry, PathBuf)> {
         let (audio, sidecar) = self.paths(id)?;
+        if failed().iter().any(|(p, _)| *p == audio) {
+            return None;
+        }
         let entry: Entry = settings::read_json(&sidecar)?;
         if entry.id != id {
             return None;
@@ -92,11 +108,12 @@ impl AudioCache {
         }
     }
 
-    /// `id`'s kept stream, should it have been kept at `quality`, through
-    /// the Premium path should that be wanted, and be whole. Blocking.
+    /// `id`'s kept stream, should it have been kept at `quality` or better
+    /// (playing it costs no data), through the Premium path should that be
+    /// wanted, and be whole. Blocking.
     pub fn find(&self, id: &str, quality: Quality, premium_path: bool) -> Option<ResolvedStream> {
         let (entry, audio) = self.whole(id)?;
-        if entry.quality != quality || (premium_path && !entry.premium_path) {
+        if entry.quality < quality || (premium_path && !entry.premium_path) {
             return None;
         }
         settings::touch(&audio);
@@ -112,6 +129,20 @@ impl AudioCache {
     pub fn holding(&self, id: &str, stream: &ResolvedStream) -> Option<PathBuf> {
         let (entry, audio) = self.whole(id)?;
         ((entry.stream.itag, entry.stream.size) == (stream.itag, stream.size)).then_some(audio)
+    }
+
+    /// Refuses `id`'s copy, which failed to play, until another is kept over
+    /// it, so it neither plays again nor goes to Downloads. Touches no disk.
+    pub fn failed_to_play(&self, id: &str) {
+        let Some((audio, _)) = self.paths(id) else {
+            return;
+        };
+        let mut failed = failed();
+        failed.retain(|(p, _)| *p != audio);
+        if failed.len() >= FAILED_LIMIT {
+            failed.remove(0);
+        }
+        failed.push((audio, FAILURES.fetch_add(1, Ordering::Relaxed)));
     }
 
     /// Where `id`'s stream is kept as it plays, unless it can't be: of no
@@ -133,12 +164,29 @@ impl AudioCache {
             quality,
             premium_path,
         };
-        let (audio, dir) = (path.clone(), self.dir.clone());
-        let kept = move || {
-            if !settings::save_json(&sidecar, &entry, "a song played") {
-                let _ = std::fs::remove_file(&audio);
+        let (audio, since) = (path.clone(), FAILURES.load(Ordering::Relaxed));
+        let cache = Self {
+            dir: self.dir.clone(),
+        };
+        let kept = move |part: &Path| -> std::io::Result<()> {
+            // A better copy kept stays.
+            let better = (cache.whole(&entry.id)).is_some_and(|(held, _)| {
+                (held.quality, held.premium_path) > (quality, premium_path)
+            });
+            if !better {
+                std::fs::rename(part, &audio)?;
+                // Checked once in place, so a download finishing meanwhile
+                // either is seen here or removes it after.
+                if crate::downloads::holds(&entry.id)
+                    || !settings::save_json(&sidecar, &entry, "a song played")
+                {
+                    let _ = std::fs::remove_file(&audio);
+                } else {
+                    failed().retain(|(p, failure)| *p != audio || *failure >= since);
+                }
             }
-            Self { dir }.prune();
+            cache.prune();
+            Ok(())
         };
         Some(Keep {
             path,
@@ -161,8 +209,7 @@ impl AudioCache {
         self.drop_leftovers(false);
     }
 
-    /// Run at startup, before any song plays: deletes what a crash left.
-    /// Blocking.
+    /// Run at startup: deletes what a crash left. Blocking.
     pub fn sweep(&self) {
         let _tidying = tidying();
         self.drop_leftovers(true);
@@ -176,7 +223,8 @@ impl AudioCache {
     }
 
     /// Sidecars without their song, and `after_crash`, files never finished:
-    /// parts, sidecars' temporary files, songs without their sidecar.
+    /// parts, sidecars' temporary files, songs without their sidecar. Never
+    /// a song's being written.
     fn drop_leftovers(&self, after_crash: bool) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
@@ -188,7 +236,12 @@ impl AudioCache {
                 Some("audio") => after_crash && !path.with_extension("json").exists(),
                 _ => false,
             };
-            if left {
+            // A song started since launch writes its part, then its sidecar
+            // after the rename, all held under its song's name.
+            let song = path
+                .file_prefix()
+                .map(|id| self.dir.join(id).with_extension("audio"));
+            if left && !song.is_some_and(|song| audio::in_use(&song)) {
                 let _ = std::fs::remove_file(&path);
             }
         }
@@ -228,7 +281,8 @@ impl AudioCache {
 mod tests {
     use super::*;
 
-    const ID: &str = "dQw4w9WgXcQ";
+    /// None that Downloads would hold.
+    const ID: &str = "zzLilyTest0";
 
     fn cache(name: &str) -> AudioCache {
         let dir = std::env::temp_dir().join(format!("lily-audio-{name}-{}", std::process::id()));
@@ -255,8 +309,11 @@ mod tests {
     fn kept_as(cache: &AudioCache, id: &str, bytes: &[u8], asked: (Quality, bool)) {
         let stream = stream(bytes.len() as u64, asked);
         let keep = cache.keep(id, &stream).unwrap();
-        std::fs::write(&keep.path, bytes).unwrap();
-        (keep.kept)();
+        let part = keep.path.with_extension("0.part");
+        std::fs::write(&part, bytes).unwrap();
+        (keep.kept)(&part).unwrap();
+        // As the download's part deletes itself once dropped.
+        let _ = std::fs::remove_file(part);
     }
 
     fn kept(cache: &AudioCache, bytes: &[u8], asked: (Quality, bool)) {
@@ -285,7 +342,7 @@ mod tests {
         assert_eq!((found.size, found.itag), (10, 251));
         assert_eq!(found.mime, "audio/webm");
         assert!(cache.owns(found.file.as_deref().unwrap()));
-        assert!(!has(&cache, ID, (Quality::Normal, false)), "quality");
+        assert!(has(&cache, ID, (Quality::Normal, false)), "a better copy");
         assert!(!has(&cache, ID, PREMIUM), "the Premium path now wanted");
         assert!(has(&cache, ID, FREE), "still kept");
         assert!(!has(&cache, &ID.to_lowercase(), FREE), "another song");
@@ -294,6 +351,39 @@ mod tests {
         kept(&cache, &[1; 10], PREMIUM);
         assert!(has(&cache, ID, FREE), "kept through it, either way");
         assert!(has(&cache, ID, PREMIUM));
+        let _ = std::fs::remove_dir_all(&cache.dir);
+    }
+
+    #[test]
+    fn a_worse_copy_neither_plays_for_nor_replaces_a_better() {
+        let cache = cache("better");
+        const NORMAL: (Quality, bool) = (Quality::Normal, false);
+        kept(&cache, &[1; 5], NORMAL);
+        assert!(!has(&cache, ID, FREE), "worse than asked");
+        kept(&cache, &[1; 10], PREMIUM);
+        kept(&cache, &[1; 6], NORMAL);
+        kept(&cache, &[1; 7], FREE);
+        let found = cache.find(ID, Quality::Low, false).unwrap();
+        assert_eq!(found.size, 10, "the Premium copy stays");
+        assert_eq!(files(&cache).len(), 2, "one copy");
+        let _ = std::fs::remove_dir_all(&cache.dir);
+    }
+
+    #[test]
+    fn a_copy_that_failed_to_play_is_refused_until_replaced() {
+        let cache = cache("failed");
+        // The failing stream's own keep, finishing after its failure.
+        let keep = cache.keep(ID, &stream(10, PREMIUM)).unwrap();
+        cache.failed_to_play(ID);
+        let part = keep.path.with_extension("0.part");
+        std::fs::write(&part, [1; 10]).unwrap();
+        (keep.kept)(&part).unwrap();
+        assert!(!has(&cache, ID, FREE));
+        let held = cache.holding(ID, &stream(10, FREE));
+        assert_eq!(held, None, "not to Downloads");
+        assert_eq!(files(&cache).len(), 2, "left for a new copy to replace");
+        kept(&cache, &[1; 8], FREE);
+        assert_eq!(cache.find(ID, Quality::High, false).unwrap().size, 8);
         let _ = std::fs::remove_dir_all(&cache.dir);
     }
 
@@ -363,9 +453,18 @@ mod tests {
             "notes.txt",
         ];
         left.into_iter().for_each(write);
+        // A song started since launch, its part and then its rename.
+        let writing = ["fffffffffff.6.part", "ggggggggggg.audio"];
+        writing.into_iter().for_each(write);
+        let _held = ["fffffffffff", "ggggggggggg"]
+            .map(|id| audio::InUse::new(&cache.dir.join(format!("{id}.audio"))));
         cache.sweep();
         let (audio, sidecar) = (format!("{ID}.audio"), format!("{ID}.json"));
-        assert_eq!(files(&cache), [audio, sidecar, "notes.txt".into()]);
+        let rest = [writing[0], writing[1], "notes.txt"].map(String::from);
+        assert_eq!(files(&cache), [&rest[..], &[audio, sidecar]].concat());
+        for name in writing {
+            let _ = std::fs::remove_file(cache.dir.join(name));
+        }
         assert_eq!(cache.size(), 10, "songs only");
         write("eeeeeeeeeee.5.part");
         cache.clear();

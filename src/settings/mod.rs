@@ -40,8 +40,8 @@ pub struct WindowGeometry {
 
 /// How much of a stream to ask for. Low and Normal cap the bitrate, for
 /// metered connections; High takes the best YouTube offers, which is 256
-/// kbps when signed in with Premium.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// kbps when signed in with Premium. Ordered worst first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Quality {
     Low,

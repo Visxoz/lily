@@ -185,7 +185,7 @@ pub(super) async fn premium_player(
     }
     // At launch the saved player plays while YouTube's version is checked;
     // a stale one costs the songs it solves meanwhile Premium, as they retry free.
-    if let Some(saved) = premium::saved_player() {
+    if let Some(saved) = premium::saved_player().await {
         let saved = Arc::new(saved);
         *shared.player_checked.lock().unwrap() = Instant::now();
         check_behind(shared, &saved, true);
