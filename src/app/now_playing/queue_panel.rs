@@ -8,6 +8,8 @@ use crate::Drag;
 use crate::api::{self, Card, CardKind, Route};
 use crate::app::{App, State, now_playing::queue_item};
 
+const REBUILD_PAST: usize = 64;
+
 /// The rows picked with Ctrl- and Shift-click are flagged on the rows
 /// themselves; this is how many, and where a Shift-click selects from.
 #[derive(Clone, Copy, Default)]
@@ -114,8 +116,13 @@ impl App {
         if removed.is_empty() {
             return;
         }
-        for &row in removed.iter().rev() {
-            self.queue_model.remove(row);
+        // Each removal moves every row after it, so many are rebuilt at once.
+        if removed.len() > REBUILD_PAST {
+            self.refresh_queue();
+        } else {
+            for &row in removed.iter().rev() {
+                self.queue_model.remove(row);
+            }
         }
         self.queue_edited();
     }

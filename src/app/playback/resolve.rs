@@ -9,7 +9,7 @@ use super::premium_state::{
 use crate::app::App;
 use crate::{
     api::{self, Api},
-    audio::{Input, Keep, Opening, Refresh, Source, StreamSpec},
+    audio::{Input, Opening, Refresh, Source, StreamSpec},
     audio_cache::AudioCache,
     settings::Quality,
     streams::{self, ResolvedStream, premium},
@@ -59,31 +59,6 @@ async fn web_fallback(
     Ok(stream)
 }
 
-/// The player's spec for `stream`, with `keep` seeing all of it before the
-/// opening takes its mime, which the copy kept is filed with.
-fn spec(
-    mut stream: ResolvedStream,
-    start_at: f64,
-    keep: impl FnOnce(&ResolvedStream) -> Option<Keep>,
-    remote: impl FnOnce(ResolvedStream) -> (Source, Refresh),
-) -> StreamSpec {
-    let file = stream.file.take();
-    let keep = file.is_none().then(|| keep(&stream)).flatten();
-    let opening = Opening {
-        mime: std::mem::take(&mut stream.mime),
-        loudness_db: stream.loudness_db,
-        start_at,
-    };
-    let input = match file {
-        Some(path) => Input::File(path),
-        None => {
-            let (source, refresh) = remote(stream);
-            Input::Stream(source, refresh, keep)
-        }
-    };
-    StreamSpec { input, opening }
-}
-
 fn source(stream: ResolvedStream) -> Source {
     Source {
         url: stream.url,
@@ -109,11 +84,8 @@ struct Resolver {
 }
 
 impl Resolver {
-    /// Premium when signed in with Premium, otherwise the first plain-URL
-    /// client that answers, and signed in, the web client as a last resort;
-    /// with whether the Premium path answered, so a copy kept of it has
-    /// nothing better to wait for. One got while Premium was skipped, backed
-    /// off or failing is asked for again once the Premium path is taken.
+    /// Premium when the account has it, else the free stream; with whether the
+    /// Premium path settled it, as a copy kept otherwise is asked for again.
     async fn resolve(&self) -> Result<(ResolvedStream, bool), String> {
         let Self {
             api,
@@ -322,7 +294,7 @@ impl App {
             api: self.api.clone(),
             premium: Arc::clone(&self.premium),
             reopening: state.playback.reopening(&video_id),
-            reports_play: state.signed_in && state.settings.youtube_history,
+            reports_play: state.reports_plays(),
             video_id,
             want_premium,
             max_kbps: state.settings.quality.max_kbps(),
@@ -337,21 +309,21 @@ impl App {
         (id == video_id && self.player.holds(&stream.url)).then(|| (stream.clone(), *at))
     }
 
-    /// A downloaded or local file plays from there, online or not, then a
-    /// download the player holds whole, then one kept from playing lately,
-    /// ahead of anything prefetched, as the song moved on from stays
-    /// prefetched for Previous.
+    /// A download or local file first, then a stream held whole or kept, as
+    /// any other prefetched (for Previous, say) would download again.
     pub(in crate::app) fn resolve_future(
         self: &Rc<Self>,
         video_id: String,
         prefetched: Option<ResolvedStream>,
     ) -> impl Future<Output = Result<ResolvedStream, String>> + Send + 'static {
-        // Only `offline_stream` vouches for a file, which may since have gone.
+        // Only `offline_stream` vouches for a download or local file, which
+        // may since have gone; a kept one gone fails over to the network.
         let offline = self.offline_stream(&video_id);
-        let prefetched = prefetched.filter(|s| s.file.is_none());
+        let cache = AudioCache::default();
+        let prefetched = prefetched.filter(|s| s.file.as_ref().is_none_or(|f| cache.owns(f)));
         let held = prefetched
             .as_ref()
-            .is_some_and(|s| self.player.holds(&s.url));
+            .is_some_and(|s| s.file.is_some() || self.player.holds(&s.url));
         let quality = self.state.borrow().settings.quality;
         let resolver = self.resolver(video_id);
         let want_premium = resolver.want_premium;
@@ -368,9 +340,7 @@ impl App {
             };
             let id = resolver.video_id.clone();
             // Off Tokio's workers, as a sleeping disk can take a while.
-            let kept = tokio::task::spawn_blocking(move || {
-                AudioCache::default().find(&id, quality, premium_copy)
-            });
+            let kept = tokio::task::spawn_blocking(move || cache.find(&id, quality, premium_copy));
             if let Ok(Some(stream)) = kept.await {
                 return Ok(stream);
             }
@@ -400,21 +370,28 @@ impl App {
     pub(in crate::app) fn stream_spec(
         &self,
         video_id: &str,
-        stream: ResolvedStream,
+        mut stream: ResolvedStream,
         start_at: f64,
     ) -> StreamSpec {
-        // A song downloaded to keep is on disk already.
-        let downloaded = self.state.borrow().downloads.contains(video_id);
-        spec(
-            stream,
+        let file = stream.file.take();
+        // Before the opening takes the mime, which the copy kept is filed with.
+        let keep = file
+            .is_none()
+            .then(|| AudioCache::default().keep(video_id, &stream))
+            .flatten();
+        let opening = Opening {
+            mime: std::mem::take(&mut stream.mime),
+            loudness_db: stream.loudness_db,
             start_at,
-            |stream| {
-                (!downloaded)
-                    .then(|| AudioCache::default().keep(video_id, stream))
-                    .flatten()
-            },
-            |stream| self.remote_source(video_id, stream),
-        )
+        };
+        let input = match file {
+            Some(path) => Input::File(path),
+            None => {
+                let (source, refresh) = self.remote_source(video_id, stream);
+                Input::Stream(source, refresh, keep)
+            }
+        };
+        StreamSpec { input, opening }
     }
 
     /// Where `video_id`'s stream downloads from. Should googlevideo refuse its
@@ -461,27 +438,5 @@ impl App {
                 premium::diag(format!("could not prepare the player: {e}"));
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keeps_a_stream_with_its_mime() {
-        let stream = ResolvedStream {
-            mime: "audio/webm".into(),
-            ..Default::default()
-        };
-        let mut seen = String::new();
-        let keep = |stream: &ResolvedStream| {
-            seen.clone_from(&stream.mime);
-            None
-        };
-        let remote = |stream| (source(stream), Box::new(|_| Err(String::new())) as Refresh);
-        let spec = spec(stream, 0.0, keep, remote);
-        assert_eq!(seen, "audio/webm");
-        assert_eq!(spec.opening.mime, "audio/webm");
     }
 }

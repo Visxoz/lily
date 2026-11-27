@@ -90,7 +90,7 @@ impl<T: Clone + Spread> Queue<T> {
             (false, true) => {
                 self.revision += 1;
                 let order = self.unshuffled.take().unwrap_or_default();
-                let current_uid = self.current.map(|c| self.entries[c].uid);
+                let current_uid = self.current_uid();
                 let rank: HashMap<u64, usize> = order
                     .into_iter()
                     .enumerate()
@@ -112,8 +112,7 @@ impl<T: Clone + Spread> Queue<T> {
                     .collect();
                 keyed.sort_by_key(|(key, _)| *key);
                 self.entries = keyed.into_iter().map(|(_, e)| e).collect();
-                self.current =
-                    current_uid.and_then(|uid| self.entries.iter().position(|e| e.uid == uid));
+                self.current = current_uid.and_then(|uid| self.find_uid(uid));
             }
             _ => {}
         }

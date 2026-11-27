@@ -94,12 +94,11 @@ impl App {
         self.report_watchtime(Flush::Last);
         let reported = {
             let mut state = self.state.borrow_mut();
+            let reports = state.reports_plays();
             let State {
                 history,
                 queue,
                 playback,
-                signed_in,
-                settings,
                 account,
                 ..
             } = &mut *state;
@@ -109,7 +108,7 @@ impl App {
             history.record(track);
             // As YouTube Music does, so the account's recommendations and
             // Listen again follow what plays here too.
-            let reported = *signed_in && settings.youtube_history && !track.is_local();
+            let reported = reports && !track.is_local();
             let watch = reported.then(|| Watch {
                 account: *account,
                 started: Instant::now(),
@@ -199,7 +198,7 @@ impl App {
         let paused = self.player.is_paused();
         let sending = {
             let mut state = self.state.borrow_mut();
-            let reporting = state.signed_in && state.settings.youtube_history;
+            let reporting = state.reports_plays();
             let account = state.account;
             let listening = &mut state.playback.listening;
             let Some(watch) = listening.watch.as_mut() else {

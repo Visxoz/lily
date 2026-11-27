@@ -35,10 +35,12 @@ pub(super) struct Playback {
     /// Bumped as a radio on its way to carry the queue on is dropped, so its
     /// answer is too, without touching a playlist's rest.
     pub(super) radio_generation: u64,
-    /// The song autoplay queued a radio from as it started, and the uids its
-    /// entries took once it landed (`None` while on its way), dropped should
-    /// that song be disliked or blocked.
+    /// Autoplay's radio seed and its entries' uids once landed, dropped with
+    /// them should the seed be disliked or blocked before playback reaches them.
     pub(super) autoplayed: Option<(String, Option<Range<u64>>)>,
+    /// The generation stopped on a song skipped past while a radio was on
+    /// its way, so that radio carries on from it as it lands.
+    pub(super) skip_waits: Option<u64>,
     /// When the current track was asked for, to time the first sound.
     pub(super) requested_at: Option<Instant>,
     pub(super) current_premium: bool,
@@ -133,6 +135,21 @@ impl Playback {
         self.reopen.as_ref().is_some_and(|(r, _)| r == id)
     }
 
+    /// Whether the radio a skip stopped for has landed, or failed; true once.
+    pub(super) fn skip_due(&mut self) -> bool {
+        !self.extending && self.skip_waits.take() == Some(self.generation)
+    }
+
+    /// Forgets autoplay's radio once the entry `uid` playing is among or past it.
+    pub(super) fn reach(&mut self, uid: Option<u64>) {
+        (self.autoplayed).take_if(|(_, radio)| {
+            radio
+                .as_ref()
+                .zip(uid)
+                .is_some_and(|(radio, uid)| uid >= radio.start)
+        });
+    }
+
     /// Keeps the stream for `id`, dropping stale ones such as tracks skipped past.
     /// Only the newest keeps its first bytes; an older one's warm-up still
     /// running fills a cell nothing else holds.
@@ -207,6 +224,11 @@ pub(super) struct State {
 }
 
 impl State {
+    /// Whether plays go to the account's YouTube history.
+    pub(super) fn reports_plays(&self) -> bool {
+        self.signed_in && self.settings.youtube_history
+    }
+
     /// Replaces the queue, dropping Smart Shuffle's batch for the old one.
     pub(super) fn set_queue(&mut self, tracks: Vec<Track>, start: usize, shuffle: bool) {
         self.playback.failures = 0;
@@ -249,6 +271,43 @@ mod tests {
             playback.resume,
             Some(("a".into(), 42.0)),
             "b never sounded, so has no place to carry on from"
+        );
+    }
+
+    #[test]
+    fn a_skip_waits_for_its_radio_once() {
+        let mut playback = Playback {
+            extending: true,
+            ..Playback::default()
+        };
+        playback.skip_waits = Some(playback.generation);
+        assert!(!playback.skip_due(), "still on its way");
+        playback.extending = false;
+        assert!(playback.skip_due());
+        assert!(!playback.skip_due(), "once");
+        playback.skip_waits = Some(playback.generation);
+        playback.generation += 1;
+        assert!(!playback.skip_due(), "another song started meanwhile");
+    }
+
+    #[test]
+    fn autoplays_radio_stays_until_playback_reaches_it() {
+        let mut playback = Playback {
+            autoplayed: Some(("seed".into(), None)),
+            ..Playback::default()
+        };
+        playback.reach(Some(9));
+        assert!(playback.autoplayed.is_some(), "on its way");
+        playback.autoplayed = Some(("seed".into(), Some(5..8)));
+        playback.reach(Some(2));
+        assert!(
+            playback.autoplayed.is_some(),
+            "Previous, then Next to the seed"
+        );
+        playback.reach(Some(9));
+        assert!(
+            playback.autoplayed.is_none(),
+            "past it, as a pick put in since"
         );
     }
 

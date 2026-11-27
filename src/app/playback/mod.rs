@@ -179,9 +179,11 @@ impl App {
                 queue, playback, ..
             } = &mut *state;
             let id = queue.current().map(|t| t.id.clone());
-            // One that would not play is never played again from memory. The
-            // playing stream may be the last song's, should this one not have
-            // resolved.
+            // One that would not play is never played again from memory.
+            if let Some(id) = &id {
+                AudioCache::default().failed_to_play(id);
+            }
+            // The playing stream may be the last song's, should this one not have resolved.
             let kept = playback.playing.take().is_some_and(|(playing, stream, _)| {
                 Some(playing) == id && stream.file.is_some_and(|f| AudioCache::default().owns(&f))
             });
@@ -198,10 +200,6 @@ impl App {
                         playback.force_free = Some(id.clone());
                         playback.prefetched.clear();
                     }
-                    // The retry streams it, whether the copy kept failed or the
-                    // failing stream was kept whole, and the copy is refused
-                    // until the next one kept replaces it.
-                    AudioCache::default().failed_to_play(&id);
                     // Mid-song, carry on from where the sound got to, read before
                     // `start_current` stops the player; at the very end, start over.
                     let position = self.player.position();
@@ -322,6 +320,17 @@ impl App {
 
     /// Resolves the next track's stream ahead of time to skip the wait.
     pub(super) fn prefetch_next(self: &Rc<Self>) {
+        // A skip that stopped for a radio on its way carries on into it, as
+        // it would had the radio landed first.
+        let skipped = {
+            let state = &mut *self.state.borrow_mut();
+            let due = state.playback.skip_due();
+            state.queue.current().filter(|_| due).map(|t| t.id.clone())
+        };
+        if let Some(id) = skipped {
+            self.skip_past(&id);
+            return;
+        }
         // Smart Shuffle places its recommendations first, as the next track
         // may be one of them.
         self.smart_top_up();
@@ -404,6 +413,10 @@ impl App {
 
     /// Queues a radio when the last track starts, so playback carries on.
     pub(super) fn extend_with_radio_if_ending(self: &Rc<Self>) {
+        // Never from a song skipped past, whose radio failed to land.
+        if self.state.borrow_mut().playback.skip_due() {
+            return;
+        }
         let (seed, queue_generation, radio_generation) = {
             let state = self.state.borrow();
             if !state.settings.autoplay
@@ -448,7 +461,7 @@ impl App {
                         app.append_unique(tracks);
                         let mut state = app.state.borrow_mut();
                         let end = state.queue.uid_mark();
-                        // Unless another song started meanwhile.
+                        // Should it still be this song's radio.
                         if let Some((song, entries)) = &mut state.playback.autoplayed
                             && *song == seed
                         {

@@ -468,7 +468,7 @@ fn revision_tracks_changes_to_entries_only() {
 }
 
 #[test]
-fn a_song_rejected_at_the_end_skips_to_nothing_and_drops_its_radio() {
+fn peeks_the_skip_and_finds_entries_by_uid() {
     let mut q = queue(2);
     q.jump(1);
     assert_eq!(q.peek_skip(), None, "the queue's end");
