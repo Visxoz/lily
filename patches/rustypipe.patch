@@ -11,7 +11,7 @@ index 542a882..224a195 100644
  
  [dependencies.tracing]
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index 06386bc..beb1f14 100644
+index 06386bc..f3ac2a6 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
 @@ -32,7 +32,8 @@ mod channel_rss;
@@ -24,7 +24,27 @@ index 06386bc..beb1f14 100644
  use std::{borrow::Cow, fmt::Debug, time::Duration};
  
  use once_cell::sync::Lazy;
-@@ -328,6 +329,81 @@ impl AuthCookie {
+@@ -145,7 +146,9 @@ struct ClientInfo<'a> {
+     original_url: &'a str,
+     visitor_data: &'a str,
+     hl: Language,
+-    gl: Country,
++    // Left out unless set, so YouTube goes by the IP address
++    #[serde(skip_serializing_if = "Option::is_none")]
++    gl: Option<Country>,
+     time_zone: &'a str,
+     utc_offset_minutes: i16,
+ }
+@@ -164,7 +167,7 @@ impl Default for ClientInfo<'_> {
+             original_url: "",
+             visitor_data: "",
+             hl: Language::En,
+-            gl: Country::Us,
++            gl: None,
+             time_zone: "UTC",
+             utc_offset_minutes: 0,
+         }
+@@ -328,6 +331,81 @@ impl AuthCookie {
      }
  }
  
@@ -106,7 +126,7 @@ index 06386bc..beb1f14 100644
  pub(crate) const DEFAULT_UA: &str =
      "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
  pub(crate) const MOBILE_UA: &str = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36";
-@@ -348,7 +424,7 @@ const DISABLE_PRETTY_PRINT_PARAMETER: &str = "prettyPrint=false";
+@@ -348,7 +426,7 @@ const DISABLE_PRETTY_PRINT_PARAMETER: &str = "prettyPrint=false";
  
  // Web client
  const DESKTOP_CLIENT_VERSION: &str = "2.20241216.05.00";
@@ -115,7 +135,7 @@ index 06386bc..beb1f14 100644
  const MOBILE_CLIENT_VERSION: &str = "2.20241217.07.00";
  const TV_CLIENT_VERSION: &str = "7.20241211.14.00";
  
-@@ -390,6 +466,26 @@ struct RustyPipeRef {
+@@ -390,12 +468,32 @@ struct RustyPipeRef {
      user_agent: Cow<'static, str>,
      visitor_data_cache: VisitorDataCache,
      botguard: Option<BotguardCfg>,
@@ -142,7 +162,23 @@ index 06386bc..beb1f14 100644
  }
  
  #[derive(Clone)]
-@@ -599,6 +695,10 @@ struct CacheEntry<T> {
+ struct RustyPipeOpts {
+     lang: Language,
+-    country: Country,
++    country: Option<Country>,
+     timezone: Option<String>,
+     utc_offset_minutes: i16,
+     report: bool,
+@@ -551,7 +649,7 @@ impl Default for RustyPipeOpts {
+     fn default() -> Self {
+         Self {
+             lang: Language::En,
+-            country: Country::Us,
++            country: None,
+             timezone: None,
+             utc_offset_minutes: 0,
+             report: false,
+@@ -599,6 +697,10 @@ struct CacheEntry<T> {
      #[serde(skip_serializing_if = "Option::is_none")]
      failed_version: Option<String>,
      data: Option<T>,
@@ -153,7 +189,7 @@ index 06386bc..beb1f14 100644
  }
  
  #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
-@@ -619,9 +719,14 @@ struct RequestResult<T> {
+@@ -619,9 +721,14 @@ struct RequestResult<T> {
  impl<T> CacheEntry<T> {
      /// Get the content of the cache if it is still fresh
      fn get(&self) -> Option<&T> {
@@ -169,7 +205,7 @@ index 06386bc..beb1f14 100644
          })
      }
  
-@@ -659,6 +764,7 @@ impl<T> From<T> for CacheEntry<T> {
+@@ -659,6 +766,7 @@ impl<T> From<T> for CacheEntry<T> {
              retry_at: None,
              failed_version: None,
              data: Some(f),
@@ -177,7 +213,7 @@ index 06386bc..beb1f14 100644
          }
      }
  }
-@@ -797,6 +903,8 @@ impl RustyPipeBuilder {
+@@ -797,6 +905,8 @@ impl RustyPipeBuilder {
                  user_agent,
                  visitor_data_cache,
                  botguard,
@@ -186,7 +222,22 @@ index 06386bc..beb1f14 100644
              }),
          })
      }
-@@ -1099,6 +1207,7 @@ impl RustyPipe {
+@@ -907,12 +1017,12 @@ impl RustyPipeBuilder {
+     ///
+     /// This will change trends and recommended content.
+     ///
+-    /// **Default value**: `Country::Us` (USA)
++    /// **Default value**: none, so YouTube goes by the IP address
+     ///
+     /// **Info**: you can set this option for individual queries, too
+     #[must_use]
+     pub fn country(mut self, country: Country) -> Self {
+-        self.default_opts.country = validate_country(country);
++        self.default_opts.country = Some(validate_country(country));
+         self
+     }
+ 
+@@ -1099,6 +1209,7 @@ impl RustyPipe {
  
              let err = match resp {
                  Ok(resp) => {
@@ -194,7 +245,7 @@ index 06386bc..beb1f14 100644
                      let status = resp.status();
                      // Immediately return in case of success or unrecoverable status code
                      if status.is_success()
-@@ -1160,6 +1269,37 @@ impl RustyPipe {
+@@ -1160,6 +1271,37 @@ impl RustyPipe {
          Ok(self.http_request_estatus(request).await?.text().await?)
      }
  
@@ -232,7 +283,7 @@ index 06386bc..beb1f14 100644
      async fn extract_client_version(&self, client_type: ClientType) -> Result<String, Error> {
          let (sw_url, html_url, origin, ua) = match client_type {
              ClientType::Desktop => (
-@@ -1234,6 +1374,18 @@ impl RustyPipe {
+@@ -1234,6 +1376,18 @@ impl RustyPipe {
          match client.get() {
              Some(cdata) => cdata.version.clone().into(),
              None => {
@@ -251,7 +302,7 @@ index 06386bc..beb1f14 100644
                  if client.should_retry() {
                      tracing::debug!("getting {client_type:?} client version");
                      match self.extract_client_version(client_type).await {
-@@ -1270,6 +1422,24 @@ impl RustyPipe {
+@@ -1270,6 +1424,24 @@ impl RustyPipe {
          }
      }
  
@@ -276,7 +327,7 @@ index 06386bc..beb1f14 100644
      /// Get deobfuscation data (either from cache or extracted from YouTube's JavaScript code)
      async fn get_deobf_data(&self) -> Result<DeobfData, Error> {
          // Write lock here to prevent concurrent tasks from fetching the same data
-@@ -1325,7 +1495,11 @@ impl RustyPipe {
+@@ -1325,7 +1497,11 @@ impl RustyPipe {
      }
  
      /// Write the current cache data to the storage backend.
@@ -289,7 +340,7 @@ index 06386bc..beb1f14 100644
          let mut cache_clients = HashMap::new();
          for (c, lk) in &self.inner.cache.clients {
              let v = lk.read().await.clone();
-@@ -1663,6 +1837,65 @@ impl RustyPipe {
+@@ -1663,6 +1839,65 @@ impl RustyPipe {
          Ok(())
      }
  
@@ -355,7 +406,25 @@ index 06386bc..beb1f14 100644
      /// Attempt to fetch the YouTube website with login cookies to check if the user is successfully logged in
      /// and the session is still valid.
      pub async fn user_auth_check_cookie(&self) -> Result<(), Error> {
-@@ -2315,6 +2548,18 @@ impl RustyPipeQuery {
+@@ -1741,7 +1976,7 @@ impl RustyPipeQuery {
+     /// This will change trends and recommended content.
+     #[must_use]
+     pub fn country(mut self, country: Country) -> Self {
+-        self.opts.country = validate_country(country);
++        self.opts.country = Some(validate_country(country));
+         self
+     }
+ 
+@@ -1913,7 +2148,7 @@ impl RustyPipeQuery {
+         let (hl, gl) = if localized {
+             (self.opts.lang, self.opts.country)
+         } else {
+-            (Language::En, Country::Us)
++            (Language::En, None)
+         };
+         let utc_offset_minutes = self.opts.utc_offset_minutes;
+         let time_zone = self.opts.timezone.as_deref().unwrap_or("UTC");
+@@ -2315,6 +2550,18 @@ impl RustyPipeQuery {
          )
      }
  
@@ -374,7 +443,7 @@ index 06386bc..beb1f14 100644
      /// Execute a request to the YouTube API, then deobfuscate and map the response.
      ///
      /// Runs a single attempt, returns Ok with a erroneous RequestResult in case of a
-@@ -2337,7 +2582,7 @@ impl RustyPipeQuery {
+@@ -2337,7 +2584,7 @@ impl RustyPipeQuery {
              .map(Cow::Borrowed)
          {
              Some(vd) => vd,
@@ -383,7 +452,7 @@ index 06386bc..beb1f14 100644
          };
  
          let context = self
-@@ -2345,7 +2590,7 @@ impl RustyPipeQuery {
+@@ -2345,7 +2592,7 @@ impl RustyPipeQuery {
              .await;
          let req_body = QBody { context, body };
  
@@ -392,7 +461,7 @@ index 06386bc..beb1f14 100644
              id,
              lang: self.opts.lang,
              utc_offset: UtcOffset::from_whole_seconds(i32::from(self.opts.utc_offset_minutes) * 60)
-@@ -2370,10 +2615,15 @@ impl RustyPipeQuery {
+@@ -2370,10 +2617,15 @@ impl RustyPipeQuery {
              .http
              .execute(request.try_clone().unwrap())
              .await?;
@@ -408,7 +477,7 @@ index 06386bc..beb1f14 100644
  
          let res = if status.is_client_error() || status.is_server_error() {
              let error_msg = serde_json::from_str::<response::ErrorResponse>(&body)
-@@ -2427,15 +2677,23 @@ impl RustyPipeQuery {
+@@ -2427,15 +2679,23 @@ impl RustyPipeQuery {
          ctx_src: &MapRespOptions<'_>,
      ) -> Result<RequestResult<M>, Error> {
          let mut last_resp = None;
@@ -433,7 +502,7 @@ index 06386bc..beb1f14 100644
                          return Ok(resp);
                      }
                      e
-@@ -2614,19 +2872,39 @@ impl RustyPipeQuery {
+@@ -2614,19 +2874,39 @@ impl RustyPipeQuery {
      ) -> Result<String, Error> {
          let visitor_data = match self.opts.visitor_data.as_deref().map(Cow::Borrowed) {
              Some(vd) => vd,
@@ -481,7 +550,7 @@ index 06386bc..beb1f14 100644
      }
  }
  
-@@ -2764,6 +3042,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
+@@ -2764,6 +3044,25 @@ fn detect_botguard_bin(program: OsString) -> Result<(OsString, String), Error> {
  mod tests {
      use super::*;
  
@@ -1112,6 +1181,29 @@ index 84202f0..1e760a9 100644
  }
  
  #[derive(Debug, Deserialize)]
+diff --git a/src/client/search.rs b/src/client/search.rs
+index b4ba544..e37a25e 100644
+--- a/src/client/search.rs
++++ b/src/client/search.rs
+@@ -75,11 +75,13 @@ impl RustyPipeQuery {
+     ) -> Result<Vec<String>, Error> {
+         let url = url::Url::parse_with_params(
+             "https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&xhr=t",
+-            &[
+-                ("hl", self.opts.lang.to_string()),
+-                ("gl", self.opts.country.to_string()),
+-                ("q", query.as_ref().to_owned()),
+-            ],
++            [
++                Some(("hl", self.opts.lang.to_string())),
++                self.opts.country.map(|c| ("gl", c.to_string())),
++                Some(("q", query.as_ref().to_owned())),
++            ]
++            .into_iter()
++            .flatten(),
+         )
+         .map_err(|_| Error::Other("could not build url".into()))?;
+ 
 diff --git a/src/error.rs b/src/error.rs
 index 81cd7fa..7c47931 100644
 --- a/src/error.rs

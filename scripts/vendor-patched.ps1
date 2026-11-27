@@ -38,7 +38,7 @@ $crates = @(
             }
             $Matches[1]
         }
-        Hint    = 'rustypipe changed. Check which of the patch''s fixes (playlist headers, privacy and setVideoId, library and subscription state, mix headers, visitor data, session cookies, signed-out answers, refusal retries) it now has, and update or drop the patch.'
+        Hint    = 'rustypipe changed. Check which of the patch''s fixes (playlist headers, privacy and setVideoId, library and subscription state, mix headers, visitor data, session cookies, signed-out answers, refusal retries, no default country) it now has, and update or drop the patch.'
     }
 )
 
