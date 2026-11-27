@@ -76,6 +76,9 @@ export component QueueRow inherits Rectangle {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+    // The song as the menu opened, as an edit may hand this row another.
+    property <string> menu-song;
+    property <string> block-label;
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -118,6 +121,12 @@ export component QueueRow inherits Rectangle {
             activated => { Api.card-action("copy-link", "song", root.item.id); }
         }
 
+        if !root.many && root.block-label != "": MenuEntry {
+            text: root.block-label;
+            icon: Icons.block;
+            activated => { Api.card-action("block", "song", root.menu-song); }
+        }
+
         if root.youtube: SongAccountEntries {
             song: root.item.id;
             can-clear-rating: !root.item.current;
@@ -130,6 +139,8 @@ export component QueueRow inherits Rectangle {
         pointer-event(ev) => {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up && !root.dragging {
                 root.menu-at = { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y };
+                root.menu-song = root.item.id;
+                root.block-label = Api.block-label("song", root.menu-song);
                 menu.show();
             }
             // Sent with no button, as the grab is lost.

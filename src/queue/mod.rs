@@ -162,6 +162,11 @@ impl<T: Clone + Spread> Queue<T> {
         self.next_index(false).map(|i| &self.entries[i].item)
     }
 
+    /// Where the user's Next goes, past a repeat of the current one.
+    pub fn peek_skip(&self) -> Option<&T> {
+        self.next_index(true).map(|i| &self.entries[i].item)
+    }
+
     fn next_index(&self, user: bool) -> Option<usize> {
         let current = self.current?;
         if self.repeat == Repeat::One && !user {

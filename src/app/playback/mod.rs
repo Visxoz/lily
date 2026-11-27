@@ -383,7 +383,7 @@ impl App {
 
     /// Queues a radio when the last track starts, so playback carries on.
     pub(super) fn extend_with_radio_if_ending(self: &Rc<Self>) {
-        let (seed, queue_generation) = {
+        let (seed, queue_generation, radio_generation) = {
             let state = self.state.borrow();
             if !state.settings.autoplay
                 || state.queue.repeat != Repeat::Off
@@ -396,24 +396,74 @@ impl App {
             let Some(current) = state.queue.current().filter(|t| !t.is_local()) else {
                 return;
             };
-            (current.id.clone(), state.queue_generation)
+            (
+                current.id.clone(),
+                state.queue_generation,
+                state.playback.radio_generation,
+            )
         };
-        self.state.borrow_mut().playback.extending = true;
+        {
+            let mut state = self.state.borrow_mut();
+            state.playback.extending = true;
+            state.playback.autoplayed = Some((seed.clone(), None));
+        }
         let api = self.api.clone();
+        let asked = seed.clone();
         self.spawn(
-            async move { api.track_radio(&seed).await },
+            async move { api.track_radio(&asked).await },
             move |app, result| {
+                // Dropped, as from a song blocked, and `extending` cleared then.
+                if app.state.borrow().playback.radio_generation != radio_generation {
+                    return;
+                }
                 app.state.borrow_mut().playback.extending = false;
                 // Another queue the radio is not for; should that one end,
                 // `next` asks again.
                 let replaced = app.state.borrow().queue_generation != queue_generation;
                 match result {
                     Ok(_) if replaced => {}
-                    Ok(tracks) => app.append_unique(tracks),
+                    Ok(tracks) => {
+                        let first = app.state.borrow().queue.uid_mark();
+                        app.append_unique(tracks);
+                        let mut state = app.state.borrow_mut();
+                        let end = state.queue.uid_mark();
+                        // Unless another song started meanwhile.
+                        if let Some((song, entries)) = &mut state.playback.autoplayed
+                            && *song == seed
+                        {
+                            *entries = Some(first..end);
+                        }
+                    }
                     Err(e) => log::warn!("autoplay radio failed: {e}"),
                 }
             },
         );
+    }
+
+    /// Drops the radio on its way to carry the queue on, so the queue's end
+    /// may ask for one again.
+    pub(super) fn cancel_extending(&self) {
+        let playback = &mut self.state.borrow_mut().playback;
+        playback.radio_generation += 1;
+        playback.extending = false;
+    }
+
+    /// Drops the radio autoplay queued, or is fetching, from a song disliked
+    /// or blocked, with Smart Shuffle's picks put in since.
+    pub(super) fn drop_autoplay_radio(self: &Rc<Self>, id: &str) {
+        let radio = {
+            let mut state = self.state.borrow_mut();
+            let Some((_, entries)) = (state.playback.autoplayed).take_if(|(seed, _)| seed == id)
+            else {
+                return;
+            };
+            entries.map(|entries| state.queue.added(&entries))
+        };
+        match radio {
+            Some(rows) => self.queue_remove(rows),
+            // Still on its way, it would join behind the song skipped to.
+            None => self.cancel_extending(),
+        }
     }
 
     pub(super) fn on_tick(self: &Rc<Self>) {

@@ -468,6 +468,31 @@ fn revision_tracks_changes_to_entries_only() {
 }
 
 #[test]
+fn a_song_rejected_at_the_end_skips_to_nothing_and_drops_its_radio() {
+    let mut q = queue(2);
+    q.jump(1);
+    assert_eq!(q.peek_skip(), None, "the queue's end");
+    q.repeat = Repeat::One;
+    assert_eq!(q.peek_next(), Some(&1));
+    assert_eq!(q.peek_skip(), Some(&0), "past a repeat of it");
+    let mut lone = queue(1);
+    lone.repeat = Repeat::All;
+    assert_eq!(lone.peek_skip(), Some(&0), "itself, which a skip stops on");
+
+    // Autoplay's radio, then a song the user queued and a pick among the radio.
+    let first = lone.uid_mark();
+    lone.extend([10, 11]);
+    let radio = first..lone.uid_mark();
+    lone.push(20);
+    lone.insert_recommended(2, 30);
+    assert_eq!(items(&lone), [0, 10, 30, 11, 20]);
+    assert_eq!(lone.added(&radio), [1, 2, 3]);
+    let playing = lone.current_uid().unwrap();
+    lone.move_to(0, 4);
+    assert_eq!(lone.find_uid(playing), Some(4), "followed as it moves");
+}
+
+#[test]
 fn clears_upcoming() {
     let mut q = queue(5);
     q.jump(1);

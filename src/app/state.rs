@@ -32,6 +32,13 @@ pub(super) struct Playback {
     pub(super) prefetched: HashMap<String, (ResolvedStream, Instant)>,
     pub(super) prefetching: HashSet<String>,
     pub(super) extending: bool,
+    /// Bumped as a radio on its way to carry the queue on is dropped, so its
+    /// answer is too, without touching a playlist's rest.
+    pub(super) radio_generation: u64,
+    /// The song autoplay queued a radio from as it started, and the uids its
+    /// entries took once it landed (`None` while on its way), dropped should
+    /// that song be disliked or blocked.
+    pub(super) autoplayed: Option<(String, Option<Range<u64>>)>,
     /// When the current track was asked for, to time the first sound.
     pub(super) requested_at: Option<Instant>,
     pub(super) current_premium: bool,
@@ -209,6 +216,7 @@ impl State {
         }
         self.queue.set(tracks, start, shuffle);
         self.queue_generation += 1;
+        self.playback.autoplayed = None;
         self.smart.reset();
     }
 }

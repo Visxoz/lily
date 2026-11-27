@@ -4,6 +4,32 @@
 use super::{Queue, Spread};
 
 impl<T: Clone + Spread> Queue<T> {
+    /// The uid the next entry put in gets, so two reads bound the entries
+    /// put in between them.
+    pub fn uid_mark(&self) -> u64 {
+        self.next_uid + 1
+    }
+
+    /// The current entry's uid, which stays its own as entries move.
+    pub fn current_uid(&self) -> Option<u64> {
+        self.current.map(|c| self.entries[c].uid)
+    }
+
+    pub fn find_uid(&self, uid: u64) -> Option<usize> {
+        self.entries.iter().position(|e| e.uid == uid)
+    }
+
+    /// The entries put in within `uids`, with Smart Shuffle's put in since
+    /// its start.
+    pub fn added(&self, uids: &std::ops::Range<u64>) -> Vec<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| uids.contains(&e.uid) || (e.recommended && e.uid >= uids.start))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     pub fn mark_recommended(&mut self, indices: impl IntoIterator<Item = usize>) {
         for index in indices {
             if let Some(entry) = self.entries.get_mut(index) {

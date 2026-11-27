@@ -86,9 +86,12 @@ export component TrackRow inherits Rectangle {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+    property <string> block-label;
 
     function open-menu(x: length, y: length) {
         root.menu-at = { x: x, y: y };
+        // By where the row is, as its action goes.
+        root.block-label = Api.track-block-label(root.section, root.index);
         menu.show();
     }
 
@@ -152,6 +155,12 @@ export component TrackRow inherits Rectangle {
             text: "Copy link";
             icon: Icons.link;
             activated => { Api.track-action("copy-link", root.section, root.index); }
+        }
+
+        if root.block-label != "": MenuEntry {
+            text: root.block-label;
+            icon: Icons.block;
+            activated => { Api.track-action("block", root.section, root.index); }
         }
     }
 

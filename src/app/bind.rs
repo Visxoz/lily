@@ -262,6 +262,8 @@ impl App {
             .choose_output_device(index as usize));
         on!(on_remove_folder, |app, index| app
             .remove_folder(index as usize));
+        on!(on_unblock_artist, |app, index| app
+            .unblock_at(index as usize));
         // Not through `on!`, as it answers.
         let weak = Rc::downgrade(self);
         ui.on_set_proxy(move |address| {
@@ -332,6 +334,19 @@ impl App {
         api.set_search_filters(ModelRc::from(Rc::new(VecModel::from(filters))));
         on!(api.on_card_action, |app, action, kind, id| app
             .card_action(&action, &kind, &id));
+        // Not through `on!`, as it answers.
+        let weak = Rc::downgrade(self);
+        api.on_block_label(move |kind, id| {
+            weak.upgrade()
+                .map(|app| app.block_label(app.artist_of(&kind, &id)))
+                .unwrap_or_default()
+        });
+        let weak = Rc::downgrade(self);
+        api.on_track_block_label(move |section, index| {
+            weak.upgrade()
+                .map(|app| app.block_label(app.track_artist(section as usize, index as usize)))
+                .unwrap_or_default()
+        });
         on!(api.on_rate, |app, id, rating| app
             .rate(id.to_string(), Rating::from_index(rating)));
         on!(api.on_save_to_playlist, |app, id| app

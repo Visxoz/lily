@@ -268,6 +268,7 @@ impl App {
         ui.set_proxy_detail(proxy_detail(proxy.is_some(), false).into());
         ui.set_proxy_address(proxy.unwrap_or_default().into());
         app.show_folders();
+        app.show_blocked();
         app.apply_theme(ui);
         // Set here and by the switch only, so other settings changing can't
         // wipe out a found update's line.

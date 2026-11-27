@@ -207,6 +207,7 @@ export component AppWindow inherits Window {
     in-out property <bool> update-prompt;
     in property <bool> check-updates;
     in property <[string]> local-folders;
+    in property <[string]> blocked-artists;
     /// What the proxy row says, and the user's own proxy saved, without any
     /// password.
     in property <string> proxy-detail;
@@ -257,6 +258,7 @@ export component AppWindow inherits Window {
     callback set-check-updates(value: bool);
     callback install-update();
     callback remove-folder(index: int);
+    callback unblock-artist(index: int);
     /// Saves a proxy for the next start, or Windows' for an empty address,
     /// answering why the address won't do, or nothing.
     callback set-proxy(address: string) -> string;
@@ -693,6 +695,8 @@ export component AppWindow inherits Window {
             proxy-address: root.proxy-address;
             add-folder => { root.go("add-folder"); }
             remove-folder(i) => { root.remove-folder(i); }
+            blocked-artists: root.blocked-artists;
+            unblock-artist(i) => { root.unblock-artist(i); }
             set-proxy(address) => { return root.set-proxy(address); }
             release-focus => { keys.focus(); }
             sign-out => { root.sign-out(); }

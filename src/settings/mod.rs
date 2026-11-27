@@ -3,6 +3,7 @@ use std::{io, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 mod account;
+mod blocked;
 mod files;
 mod history;
 mod searches;
@@ -12,6 +13,7 @@ pub use account::{
     load_home, load_library, load_visitor, remove_account_data, renewal_due, save_home,
     save_library, save_renewal, save_visitor,
 };
+pub use blocked::Blocked;
 pub use files::{
     HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, prune, remove_old_cookie, write_atomic,
     write_atomic_parts,
@@ -252,6 +254,9 @@ pub struct Settings {
     pub account_photo: Option<String>,
     /// Playlist IDs pinned to the top of the sidebar, first pinned first.
     pub pinned: Vec<String>,
+    /// Artists whose songs play only when chosen, for every account on this
+    /// PC; YouTube is never told.
+    pub blocked_artists: Blocked,
 }
 
 /// Older versions kept `normalise` as on or off, which is Normal or Off.
@@ -348,6 +353,7 @@ impl Default for Settings {
             output_device: None,
             account_photo: None,
             pinned: Vec::new(),
+            blocked_artists: Blocked::default(),
         }
     }
 }

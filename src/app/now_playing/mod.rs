@@ -59,6 +59,8 @@ impl App {
         let ui = self.ui();
         // Not a song shown again, as on repeat or a retry.
         let new_song = ui.global::<ApiGlobal>().get_playing_id() != track.id.as_str();
+        // Autoplay's radio goes with its song only while that song plays.
+        (self.state.borrow_mut().playback.autoplayed).take_if(|(seed, _)| *seed != track.id);
         self.show_track_details(&ui, track, position);
         ui.set_np_buffered(0.0);
         self.show_playing(true);

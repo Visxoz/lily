@@ -18,6 +18,7 @@ export component Card {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+    property <string> block-label;
 
     menu := PopupMenu {
         x: root.menu-at.x - root.absolute-position.x;
@@ -45,6 +46,12 @@ export component Card {
             icon: Icons.link;
             activated => { Api.card-action("copy-link", root.card.kind, root.card.id); }
         }
+
+        if root.block-label != "": MenuEntry {
+            text: root.block-label;
+            icon: Icons.block;
+            activated => { Api.card-action("block", root.card.kind, root.card.id); }
+        }
     }
 
     Rectangle {
@@ -65,6 +72,7 @@ export component Card {
         pointer-event(ev) => {
             if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up && !self.dragging {
                 root.menu-at = { x: self.pointer-x, y: self.absolute-position.y + self.mouse-y };
+                root.block-label = Api.block-label(root.card.kind, root.card.id);
                 menu.show();
             }
             if ev.button != PointerEventButton.left {

@@ -192,6 +192,8 @@ pub struct Header {
     pub subscribed: Option<bool>,
     /// The channel subscribing to the artist takes.
     pub channel_id: Option<String>,
+    /// The artist's own ID, which its songs name; the route's may be an alias.
+    pub artist_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

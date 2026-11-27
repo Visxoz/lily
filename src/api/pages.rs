@@ -645,6 +645,7 @@ impl Api {
             radio_id: artist.radio_id,
             subscribed: artist.subscribed,
             channel_id: artist.subscribe_channel_id,
+            artist_id: Some(artist.id),
             ..Default::default()
         };
 

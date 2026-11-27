@@ -16,6 +16,23 @@ impl App {
         self.next(true);
     }
 
+    /// Skips a song disliked or blocked, stopping on it at the queue's end
+    /// or a repeat of it alone, rather than restarting it or playing on into
+    /// a radio seeded by it, and drops the radio autoplay queued from it.
+    pub(in crate::app) fn skip_past(self: &Rc<Self>, id: &str) {
+        self.drop_autoplay_radio(id);
+        let skips = (self.state.borrow().queue.peek_skip()).is_some_and(|t| t.id != id);
+        if skips {
+            self.skip();
+            return;
+        }
+        // A radio still on its way would play on from it, as would the song
+        // still resolving.
+        self.state.borrow_mut().playback.generation += 1;
+        self.cancel_extending();
+        self.stop();
+    }
+
     pub(in crate::app) fn next(self: &Rc<Self>, user: bool) {
         let moved = self.state.borrow_mut().queue.advance(user).is_some();
         if moved {

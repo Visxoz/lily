@@ -170,6 +170,38 @@ component SectionTabs inherits Rectangle {
     }
 }
 
+/// Names, each with a button taking it out, scrolling past `room` so many
+/// can't push the dialog past the window.
+component RemovableList {
+    in property <[string]> names;
+    in property <length> room;
+    callback remove(index: int);
+    height: min(root.room, root.names.length * 40px);
+    list := ListView {
+        width: 100%;
+        height: 100%;
+        for name[i] in root.names: HorizontalLayout {
+            width: list.visible-width;
+            height: 40px;
+            // Clear of the scroll bar.
+            padding-right: 14px;
+            spacing: 8px;
+            Text {
+                text: name;
+                vertical-alignment: center;
+                overflow: elide;
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            IconButton {
+                icon: Icons.close;
+                icon-size: 16px;
+                clicked => { root.remove(i); }
+            }
+        }
+    }
+}
+
 /// One tab's rows, all tabs the same height so the dialog keeps its size
 /// when switching between them.
 component Tab inherits VerticalLayout {
@@ -225,6 +257,7 @@ export component SettingsDialog inherits Dialog {
     in property <string> listenbrainz-user;
     in property <bool> listenbrainz-connecting;
     in property <[string]> local-folders;
+    in property <[string]> blocked-artists;
     in property <string> proxy-detail;
     /// The saved proxy without any password, or none.
     in property <string> proxy-address;
@@ -256,6 +289,7 @@ export component SettingsDialog inherits Dialog {
     callback sign-out();
     callback add-folder();
     callback remove-folder(index: int);
+    callback unblock-artist(index: int);
     callback set-proxy(address: string) -> string;
     /// The address field going with its tab or the dialog, which would
     /// otherwise leave the window's keys with nothing focused.
@@ -335,6 +369,19 @@ export component SettingsDialog inherits Dialog {
             detail: "Pauses when headphones or the device playing are unplugged, rather than carrying on through another.";
             checked: root.pause-on-unplug;
             toggled(v) => { root.set-pause-on-unplug(v); }
+        }
+
+        SettingRow {
+            label: "Blocked artists";
+            detail: root.blocked-artists.length == 0
+                ? "Their songs are left out of what plays unless you pick one yourself. Block an artist from a song's or artist's menu."
+                : "Their songs are left out of what plays unless you pick one yourself. Remove one here to unblock it.";
+        }
+
+        if root.blocked-artists.length > 0: RemovableList {
+            names: root.blocked-artists;
+            room: 120px;
+            remove(i) => { root.unblock-artist(i); }
         }
 
         ToggleRow {
@@ -434,28 +481,10 @@ export component SettingsDialog inherits Dialog {
             }
         }
 
-        // Scrolls, so many folders can't push the dialog past the window.
-        if root.local-folders.length > 0: folders := ListView {
-            height: min(300px, root.local-folders.length * 40px);
-            for folder[i] in root.local-folders: HorizontalLayout {
-                width: folders.visible-width;
-                height: 40px;
-                // Clear of the scroll bar.
-                padding-right: 14px;
-                spacing: 8px;
-                Text {
-                    text: folder;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    font-size: 13px;
-                    color: Theme.text-secondary;
-                }
-                IconButton {
-                    icon: Icons.close;
-                    icon-size: 16px;
-                    clicked => { root.remove-folder(i); }
-                }
-            }
+        if root.local-folders.length > 0: RemovableList {
+            names: root.local-folders;
+            room: 300px;
+            remove(i) => { root.remove-folder(i); }
         }
     }
 

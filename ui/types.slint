@@ -109,6 +109,11 @@ export global Api {
     callback card-download(kind: string, id: string);
     /// A menu action on a song, album, playlist or artist, by its card kind.
     callback card-action(action: string, kind: string, id: string);
+    /// "Block" or "Unblock" and the artist that a song's or artist's
+    /// "block" action acts on, or empty for none; "header" is the page's.
+    callback block-label(kind: string, id: string) -> string;
+    /// The same for a song row's "block" `track-action`.
+    callback track-block-label(section: int, index: int) -> string;
     /// Downloads a song in the queue, or removes its download.
     callback download(id: string, remove: bool);
     callback header-action(action: string);

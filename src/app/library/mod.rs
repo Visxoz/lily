@@ -1,7 +1,8 @@
 //! The user's library: ratings, the add-to-playlist picker, saving albums
-//! and playlists and subscribing to artists, their own playlists' edits, and
-//! music kept offline.
+//! and playlists and subscribing to artists, their own playlists' edits,
+//! blocked artists, and music kept offline.
 
+mod blocked;
 pub(super) mod offline;
 pub(super) mod playlist_edit;
 
@@ -65,11 +66,7 @@ impl App {
             self.state.borrow_mut().rating_generation += 1;
             global.set_playing_rating(rating.index());
             if rating == Rating::Dislike {
-                self.skip();
-                // Nothing to skip to: the queue's end, or a repeat of it.
-                if self.playing_id().as_deref() == Some(id.as_str()) {
-                    self.stop();
-                }
+                self.skip_past(&id);
             }
         }
         let api = self.api.clone();

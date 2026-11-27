@@ -1,6 +1,6 @@
 use std::{collections::HashSet, rc::Rc};
 
-use crate::api::{self, CardKind, Page, QueueMode, Route, Section, Track};
+use crate::api::{self, ArtistRef, CardKind, Page, QueueMode, Route, Section, Track};
 use crate::app::App;
 
 fn card_kind(kind: &str) -> Option<CardKind> {
@@ -18,6 +18,14 @@ impl App {
             Section::Tracks { tracks, .. } => tracks.get(index).cloned(),
             Section::Cards { .. } => None,
         }
+    }
+
+    /// The artist a song row's "block" acts on.
+    pub(in crate::app) fn track_artist(&self, section: usize, index: usize) -> Option<ArtistRef> {
+        self.section_track(section, index)?
+            .artists
+            .into_iter()
+            .next()
     }
 
     pub(in crate::app) fn play_from_section(self: &Rc<Self>, section: usize, index: usize) {
@@ -44,20 +52,26 @@ impl App {
 
     fn play_with_radio(self: &Rc<Self>, track: Track) {
         let seed = track.id.clone();
-        let queue_generation = {
+        let (queue_generation, radio_generation) = {
             let mut state = self.state.borrow_mut();
             // Shuffled, if on, so the radio is shuffled in as it arrives.
             let shuffle = state.settings.shuffle;
             state.set_queue(vec![track], 0, shuffle);
             // Autoplay would otherwise fetch the same radio once this starts.
             state.playback.extending = true;
-            state.queue_generation
+            // So a radio still on its way for the last queue can't clear it.
+            state.playback.radio_generation += 1;
+            (state.queue_generation, state.playback.radio_generation)
         };
         self.start_current();
         let api = self.api.clone();
         self.spawn(
             async move { api.track_radio(&seed).await },
             move |app, result| {
+                // Dropped with its seed, and `extending` cleared then.
+                if app.state.borrow().playback.radio_generation != radio_generation {
+                    return;
+                }
                 app.state.borrow_mut().playback.extending = false;
                 match result {
                     Ok(tracks) => {
@@ -87,7 +101,9 @@ impl App {
         self.append(fresh);
     }
 
-    fn append(self: &Rc<Self>, tracks: Vec<Track>) {
+    /// Leaves out blocked artists' songs, as none of these was chosen.
+    fn append(self: &Rc<Self>, mut tracks: Vec<Track>) {
+        (self.state.borrow().settings.blocked_artists).leave_out(&mut tracks, None);
         if tracks.is_empty() {
             return;
         }
@@ -112,8 +128,15 @@ impl App {
         self.play_queue(tracks, None);
     }
 
-    /// A `start` of `None` starts from a random track if shuffling, else the first.
-    fn play_queue(self: &Rc<Self>, tracks: Vec<Track>, start: Option<usize>) {
+    /// A `start` of `None` starts from a random track if shuffling, else the
+    /// first. The song at `start` was chosen, so it plays though its artist is
+    /// blocked; the rest leave blocked artists out.
+    fn play_queue(self: &Rc<Self>, mut tracks: Vec<Track>, start: Option<usize>) {
+        let start = (self.state.borrow().settings.blocked_artists).leave_out(&mut tracks, start);
+        if tracks.is_empty() {
+            self.toast("Every song here is by an artist you've blocked");
+            return;
+        }
         {
             let mut state = self.state.borrow_mut();
             let shuffle = state.settings.shuffle;
@@ -148,6 +171,9 @@ impl App {
         }
         if let "rename" | "delete" | "public" | "unlisted" | "private" = action {
             return self.edit_playlist(action);
+        }
+        if action == "block" {
+            return self.toggle_block(self.artist_of("header", ""));
         }
         let (tracks, shuffle_playlist, unloaded, radio_id) = {
             let state = self.state.borrow();
@@ -207,6 +233,7 @@ impl App {
                 });
                 self.list_library();
             }
+            "block" => self.toggle_block(self.artist_of(kind, id)),
             _ => {}
         }
     }
@@ -338,15 +365,24 @@ impl App {
             Some(Section::Cards { .. }) | None => Vec::new(),
         };
         let shown = tracks.len();
-        self.play_card_tracks(tracks, radio);
-        if !more || shown == 0 {
-            return;
+        // A first page by blocked artists alone starts once the rest is in.
+        let waits = more && shown > 0 && {
+            let state = self.state.borrow();
+            tracks.iter().all(|t| state.settings.blocked_artists.has(t))
+        };
+        let before = self.state.borrow().queue_generation;
+        if !waits {
+            self.play_card_tracks(tracks, radio);
         }
-        // Read once the queue is set, so it is this queue's.
+        // Read once the queue is set, so it is this queue's; unchanged, nothing
+        // played and the queue isn't this page's.
         let (queue_generation, account) = {
             let state = self.state.borrow();
             (state.queue_generation, state.account)
         };
+        if !more || shown == 0 || (!waits && queue_generation == before) {
+            return;
+        }
         let api = self.api.clone();
         self.spawn(
             async move { api.complete(page).await },
@@ -360,10 +396,21 @@ impl App {
                 if app.state.borrow().queue_generation != queue_generation {
                     return;
                 }
-                // Not deduplicated, as a playlist may list a song twice.
-                if let Some(Section::Tracks { tracks, .. }) = page.sections.first_mut()
-                    && tracks.len() > shown
-                {
+                let Some(Section::Tracks { tracks, .. }) = page.sections.first_mut() else {
+                    return;
+                };
+                if waits {
+                    // Every song blocked, it says so only once the whole list is in.
+                    let state = app.state.borrow();
+                    let all = tracks.iter().all(|t| state.settings.blocked_artists.has(t));
+                    drop(state);
+                    if !whole && all {
+                        app.toast("Couldn't load the rest of this playlist");
+                        return;
+                    }
+                    app.play_tracks(std::mem::take(tracks), false);
+                } else if tracks.len() > shown {
+                    // Not deduplicated, as a playlist may list a song twice.
                     app.append(tracks.split_off(shown));
                 }
             },
@@ -456,6 +503,7 @@ impl App {
             }
             "copy-link" if !track.is_local() => self.copy_link(api::link("song", &track.id)),
             "remove-from-playlist" => self.remove_from_playlist(section, track),
+            "block" => self.toggle_block(self.track_artist(section, index)),
             _ => {}
         }
     }

@@ -134,9 +134,11 @@ export component PageHeader {
 
     /// Where the menu was asked for, in window coordinates.
     property <Point> menu-at;
+    property <string> block-label;
 
     function open-menu(at: Point) {
         root.menu-at = at;
+        root.block-label = Api.block-label("header", "");
         menu.show();
     }
 
@@ -147,6 +149,12 @@ export component PageHeader {
             text: "Copy link";
             icon: Icons.link;
             activated => { Api.header-action("copy-link"); }
+        }
+
+        if root.block-label != "": MenuEntry {
+            text: root.block-label;
+            icon: Icons.block;
+            activated => { Api.header-action("block"); }
         }
 
         if Api.own-playlist: MenuEntry {

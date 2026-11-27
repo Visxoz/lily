@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::app::{App, State};
-use crate::{api::Track, queue::Queue};
+use crate::{api::Track, queue::Queue, settings::Blocked};
 
 /// The user's own tracks between two recommendations.
 const GAP_MIN: usize = 3;
@@ -42,9 +42,11 @@ impl Smart {
         self.gap = 0;
     }
 
-    fn fresh(&mut self) -> Option<Track> {
+    /// Checks `blocked` as each is placed, so one blocked since its batch
+    /// arrived is left out too.
+    fn fresh(&mut self, blocked: &Blocked) -> Option<Track> {
         while let Some(track) = self.pool.pop_front() {
-            if !self.known.contains(&track.id) {
+            if !self.known.contains(&track.id) && !blocked.has(&track) {
                 return Some(track);
             }
         }
@@ -60,9 +62,10 @@ impl Smart {
     }
 }
 
-/// One of the user's own tracks from YouTube, as local files have no radio.
-fn seed(queue: &mut Queue<Track>) -> Option<String> {
-    let seeds = |(t, r): &(&Track, bool)| !r && !t.is_local();
+/// One of the user's own tracks from YouTube, as local files have no radio,
+/// and never a blocked artist's, whose radio would be mostly theirs.
+fn seed(queue: &mut Queue<Track>, blocked: &Blocked) -> Option<String> {
+    let seeds = |(t, r): &(&Track, bool)| !r && !t.is_local() && !blocked.has(t);
     let own = queue.entries().filter(seeds).count();
     let pick = queue.random_below(own);
     queue
@@ -85,8 +88,10 @@ impl App {
                 queue,
                 smart,
                 history,
+                settings,
                 ..
             } = &mut *state;
+            let blocked = &settings.blocked_artists;
             let Some(current) = queue.current_index() else {
                 return;
             };
@@ -114,7 +119,7 @@ impl App {
                     smart.gap = GAP_MIN + queue.random_below(GAP_MAX - GAP_MIN + 1);
                 }
                 if run >= smart.gap {
-                    let Some(track) = smart.fresh() else {
+                    let Some(track) = smart.fresh(blocked) else {
                         dry = true;
                         break;
                     };
@@ -131,7 +136,7 @@ impl App {
                 index += 1;
             }
             smart.known_revision = Some(queue.revision());
-            let fetch = dry.then(|| seed(queue)).flatten().map(|seed| {
+            let fetch = dry.then(|| seed(queue, blocked)).flatten().map(|seed| {
                 smart.fetching = true;
                 (seed, smart.generation)
             });
@@ -152,17 +157,22 @@ impl App {
             move |app, result| {
                 let fresh = {
                     let mut state = app.state.borrow_mut();
-                    let smart = &mut state.smart;
+                    let State {
+                        smart, settings, ..
+                    } = &mut *state;
                     if smart.generation != generation {
                         return;
                     }
                     smart.fetching = false;
                     match result {
+                        // A batch of blocked songs alone brings nothing new.
                         Ok(tracks) => {
-                            let known = &smart.known;
-                            smart
-                                .pool
-                                .extend(tracks.into_iter().filter(|t| !known.contains(&t.id)));
+                            let (known, blocked) = (&smart.known, &settings.blocked_artists);
+                            smart.pool.extend(
+                                tracks
+                                    .into_iter()
+                                    .filter(|t| !known.contains(&t.id) && !blocked.has(t)),
+                            );
                             !smart.pool.is_empty()
                         }
                         Err(e) => {
@@ -178,5 +188,50 @@ impl App {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ArtistRef;
+
+    fn song(id: &str) -> Track {
+        Track {
+            id: id.into(),
+            artists: vec![ArtistRef {
+                id: Some(format!("UC{id}")),
+                name: format!("Artist {id}"),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn blocking(ids: impl IntoIterator<Item = String>) -> Blocked {
+        ids.into_iter()
+            .map(|id| ArtistRef {
+                id: Some(format!("UC{id}")),
+                name: format!("Artist {id}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn leaves_blocked_artists_out_of_seeds_and_picks() {
+        let mut queue = Queue::with_seed(7);
+        queue.set((0..20).map(|i| song(&i.to_string())).collect(), 0, false);
+        let blocked = blocking((0..20).filter(|&i| i != 3).map(|i| i.to_string()));
+        for _ in 0..10 {
+            assert_eq!(seed(&mut queue, &blocked).as_deref(), Some("3"));
+        }
+        assert_eq!(
+            seed(&mut queue, &blocking((0..20).map(|i| i.to_string()))),
+            None
+        );
+
+        let mut smart = Smart::default();
+        smart.pool.extend([song("x"), song("y")]);
+        let blocked = blocking(["x".to_owned()]);
+        assert_eq!(smart.fresh(&blocked).map(|t| t.id).as_deref(), Some("y"));
     }
 }

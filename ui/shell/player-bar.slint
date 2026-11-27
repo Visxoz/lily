@@ -75,9 +75,16 @@ export component PlayerBar inherits Rectangle {
     // quality badge goes and the volume slider shortens.
     property <bool> narrow: root.width < 1270px;
 
+    // The song as the menu opened, so a block names the artist its entry did
+    // though the song moves on meanwhile.
+    property <string> menu-song;
+    property <string> block-label;
+
     function open-menu(x: length, y: length) {
         if root.has-track {
             root.menu-at = { x: x, y: y };
+            root.menu-song = Api.playing-id;
+            root.block-label = Api.block-label("song", root.menu-song);
             menu.show();
         }
     }
@@ -115,6 +122,12 @@ export component PlayerBar inherits Rectangle {
             text: "Copy link";
             icon: Icons.link;
             activated => { Api.card-action("copy-link", "song", Api.playing-id); }
+        }
+
+        if root.block-label != "": MenuEntry {
+            text: root.block-label;
+            icon: Icons.block;
+            activated => { Api.card-action("block", "song", root.menu-song); }
         }
     }
 
