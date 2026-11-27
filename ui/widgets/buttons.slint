@@ -221,6 +221,9 @@ export component PillGroup inherits FlexboxLayout {
     in property <[string]> labels;
     in property <int> current;
     callback picked(index: int);
+    // A flexbox has no width limit, so in a row it would take the spare width,
+    // leaving its pills short of the row's end.
+    horizontal-stretch: 0;
     flex-wrap: no-wrap;
     spacing: 6px;
     for label[i] in root.labels: Pill {

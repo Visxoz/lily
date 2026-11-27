@@ -129,7 +129,7 @@ export component QueueRow inherits Rectangle {
         }
 
         if root.youtube: SongAccountEntries {
-            song: root.item.id;
+            song: root.menu-song;
             can-clear-rating: !root.item.current;
             pin-label: root.pin-label;
         }

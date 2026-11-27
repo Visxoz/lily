@@ -203,11 +203,12 @@ component RemovableList {
 }
 
 /// One tab's rows, all tabs the same height so the dialog keeps its size
-/// when switching between them.
+/// when switching between them: Playback's with Crossfade shown, and short
+/// enough for the dialog to fit the smallest window.
 component Tab inherits VerticalLayout {
     spacing: 18px;
     alignment: start;
-    min-height: 400px;
+    min-height: 420px;
 }
 
 export component SettingsDialog inherits Dialog {
@@ -378,19 +379,6 @@ export component SettingsDialog inherits Dialog {
             toggled(v) => { root.set-pause-on-unplug(v); }
         }
 
-        SettingRow {
-            label: "Blocked artists";
-            detail: root.blocked-artists.length == 0
-                ? "Their songs are left out of what plays unless you pick one yourself. Block an artist from a song's or artist's menu."
-                : "Their songs are left out of what plays unless you pick one yourself. Remove one here to unblock it.";
-        }
-
-        if root.blocked-artists.length > 0: RemovableList {
-            names: root.blocked-artists;
-            room: 120px;
-            remove(i) => { root.unblock-artist(i); }
-        }
-
         ToggleRow {
             label: "Autoplay";
             detail: "Keeps playing similar music when the queue ends.";
@@ -507,12 +495,25 @@ export component SettingsDialog inherits Dialog {
             }
         }
 
-        // Short enough that the audio cache's row above keeps the tab no
-        // taller than the others.
+        // The two lists share four rows' room, half each once both are long,
+        // so the tab is no taller than the others.
         if root.local-folders.length > 0: RemovableList {
             names: root.local-folders;
-            room: 240px;
+            room: 160px - min(root.blocked-artists.length * 40px, 80px);
             remove(i) => { root.remove-folder(i); }
+        }
+
+        SettingRow {
+            label: "Blocked artists";
+            detail: root.blocked-artists.length == 0
+                ? "Their songs are left out of what plays unless you pick one yourself. Block an artist from a song's or artist's menu."
+                : "Their songs are left out of what plays unless you pick one yourself. Remove one here to unblock it.";
+        }
+
+        if root.blocked-artists.length > 0: RemovableList {
+            names: root.blocked-artists;
+            room: 160px - min(root.local-folders.length * 40px, 80px);
+            remove(i) => { root.unblock-artist(i); }
         }
     }
 

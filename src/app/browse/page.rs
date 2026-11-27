@@ -78,6 +78,21 @@ fn grid_keeps(first: usize, end: usize) -> std::ops::Range<usize> {
     first.saturating_sub(margin)..end + margin
 }
 
+/// Where Library scrolls to as its Pinned rows, `added` tall, come in at its
+/// top, or go (`added` 0), while scrolled to `scroll`: none once its first row
+/// is off screen, as Slint then keeps what shows in place itself.
+fn pins_scroll(first_shown: bool, scroll: f32, added: f32) -> Option<f32> {
+    if !first_shown || scroll >= 0.0 {
+        // At the very top, rows added show where they go.
+        None
+    } else if added > 0.0 {
+        Some(scroll - added)
+    } else {
+        // What was below can't sit lower than the top.
+        Some(0.0)
+    }
+}
+
 /// About a page of search results: rows this near a paused list's end ask
 /// for its next.
 const MORE_AHEAD: usize = 20;
@@ -442,50 +457,38 @@ impl App {
             .take_while(|&i| rows.row_data(i).is_some_and(|r| r.section == PINNED))
             .count();
         let new = built.rows.len();
-        if new == 0 {
-            // Taking the rows out could move the page by as much of them as
-            // shows, which Slint alone knows, so they empty and go the next
-            // time Library is shown.
-            for i in 0..old {
-                if let Some(row) = rows.row_data(i) {
-                    let cards = ModelRc::default();
-                    rows.set_row_data(i, RowItem { cards, ..row });
-                }
+        if old == new && new > 0 {
+            // The same two rows, title and carousel, so nothing moves.
+            for (i, row) in built.rows.into_iter().enumerate() {
+                rows.set_row_data(i, row);
             }
-            return;
-        }
-        if old == 0 {
+        } else if old != new {
             // Slint's list keeps the rows on screen in place through rows
-            // added above them, but not before the first, so only while that
-            // shows does the page scroll by what is added; as none of
-            // Library's rows is shorter than that title, any other scroll is
-            // past it.
+            // added or taken out wholly above the one at the view's top, so
+            // only while the page's first row shows does the page scroll; as
+            // none of Library's rows is shorter than a title, any other scroll
+            // is past it. A carousel taken out from the view's top still
+            // lifts the rows below it by its height.
             let ui = self.ui();
             let scroll = ui.get_page_scroll();
             let height = |row: RowItem| ui.global::<Rows>().invoke_height(row, 0.0);
-            let added: f32 = built.rows.iter().cloned().map(height).sum();
             let first_shown = rows.row_data(0).is_some_and(|r| -scroll < height(r));
+            let added: f32 = built.rows.iter().cloned().map(height).sum();
+            for _ in 0..old {
+                rows.remove(0);
+            }
             for (i, row) in built.rows.into_iter().enumerate() {
                 rows.insert(i, row);
             }
-            if first_shown {
-                ui.set_page_scroll(scroll - added);
+            if let Some(scroll) = pins_scroll(first_shown, scroll, added) {
+                ui.set_page_scroll(scroll);
             }
             // Lazy grids say where they are by their row, which moved.
             let moved = (self.grid_lines.take().into_iter())
-                .map(|(row, lines)| (row + new, lines))
+                .map(|(row, lines)| ((row + new).saturating_sub(old), lines))
                 .collect();
             *self.grid_lines.borrow_mut() = moved;
             self.load_grids();
-        } else {
-            // The same two rows, title and carousel, so nothing moves.
-            for (i, row) in built.rows.into_iter().enumerate() {
-                if i < old {
-                    rows.set_row_data(i, row);
-                } else {
-                    rows.insert(i, row);
-                }
-            }
         }
         self.load_art(built.card_art, Vec::new(), generation);
     }
@@ -582,22 +585,27 @@ impl App {
     /// Lazy grid `row` has cards `first` up to `end` near the screen.
     pub(in crate::app) fn on_grid_lines(self: &Rc<Self>, row: i32, first: i32, end: i32) {
         let [row, first, end] = [row, first, end].map(|n| usize::try_from(n).unwrap_or(0));
-        self.grid_lines.borrow_mut().insert(row, (first, end));
+        let was = self.grid_lines.borrow_mut().insert(row, (first, end));
+        // A lazy grid starts bare and art lands only within where it last said
+        // it was, so only those cards can need letting go of.
+        let held = was.map_or(0..0, |(first, end)| grid_keeps(first, end));
         // Said during Slint's layout pass, so the model is changed once it ends.
         let app = Rc::clone(self);
-        slint::Timer::single_shot(std::time::Duration::ZERO, move || app.load_grid(row));
+        slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+            app.load_grid(row, held);
+        });
     }
 
     fn load_grids(self: &Rc<Self>) {
         let rows: Vec<usize> = self.grid_lines.borrow().keys().copied().collect();
         for row in rows {
-            self.load_grid(row);
+            self.load_grid(row, 0..0);
         }
     }
 
-    /// Loads the art of lazy grid `row`'s cards near the screen and lets go of
-    /// that of those far off; none while the window is hidden.
-    fn load_grid(self: &Rc<Self>, row: usize) {
+    /// Loads the art of lazy grid `row`'s cards near the screen, and lets go of
+    /// any far off among `held`; none while the window is hidden.
+    fn load_grid(self: &Rc<Self>, row: usize, held: std::ops::Range<usize>) {
         let Some((first, end)) = self.grid_lines.borrow().get(&row).copied() else {
             return;
         };
@@ -608,19 +616,20 @@ impl App {
             return;
         }
         let (cards, keeps) = (item.cards, grid_keeps(first, end));
-        let mut wanted = Vec::new();
-        for i in 0..cards.row_count() {
-            let Some(mut card) = cards.row_data(i) else {
-                continue;
-            };
-            let has_art = card.art.size().width > 0;
-            if has_art && !keeps.contains(&i) {
+        for i in held.start..held.end.min(cards.row_count()) {
+            if !keeps.contains(&i)
+                && let Some(mut card) = cards.row_data(i).filter(|c| c.art.size().width > 0)
+            {
                 card.art = Image::default();
                 cards.set_row_data(i, card);
-            } else if !has_art && (first..end).contains(&i) {
-                wanted.push((i, card.id));
             }
         }
+        let wanted: Vec<_> = (first..end.min(cards.row_count()))
+            .filter_map(|i| {
+                let card = cards.row_data(i).filter(|c| c.art.size().width == 0)?;
+                Some((i, card.id))
+            })
+            .collect();
         let (generation, wanted) = {
             let state = self.state.borrow();
             let Some(Section::Cards { cards: page, .. }) =
@@ -647,8 +656,10 @@ impl App {
             };
             let cards = cards.clone();
             self.load_image_while(url, images::CARD, still, move |app, image| {
-                // Only on that card, should a reorder have moved another in.
+                // Only on that card, should a reorder have moved another in, and
+                // while its grid is still that row, as Pinned's rows move them.
                 if still(app)
+                    && app.rows().row_data(row).is_some_and(|r| r.cards == cards)
                     && let Some(mut card) = cards
                         .row_data(i)
                         .filter(|c| c.id == id && c.art.size().width == 0)
@@ -802,6 +813,8 @@ impl App {
         };
 
         let mut lazy_rows = Vec::new();
+        // Each card model changed, from its first new card, for the pins' mark.
+        let mut added = Vec::new();
         for (i, shown) in grown {
             let Section::Cards { cards, layout, .. } = &page.sections[i] else {
                 continue;
@@ -813,17 +826,21 @@ impl App {
                 continue;
             };
             let lazy = is_lazy(cards, layout);
-            // Grown long, a grid lets go of what is far off once it says where it is.
+            // Grown long, a grid starts again bare, so art still on its way to
+            // its cards lands on none, and only those near the screen get theirs.
             let mut changed = row.lazy_art != lazy;
             row.lazy_art = lazy;
             let mut urls = card_thumbs(cards);
             // Grown in place, so the cards shown and what lies below stay put.
-            if let Some(shown) = shown.filter(|&shown| shown <= cards.len())
+            let mut from = 0;
+            if !changed
+                && let Some(shown) = shown.filter(|&shown| shown <= cards.len())
                 && let Some(model) = row.cards.as_any().downcast_ref::<VecModel<CardItem>>()
             {
                 model.extend(cards[shown..].iter().map(|c| section_card(c, layout, lazy)));
                 // Those shown have theirs.
                 urls[..shown].fill(None);
+                from = shown;
             } else {
                 let items: Vec<_> = cards
                     .iter()
@@ -833,6 +850,7 @@ impl App {
                 changed = true;
             }
             let model = row.cards.clone();
+            added.push((model.clone(), from));
             if changed {
                 self.rows().set_row_data(at, row);
             }
@@ -879,6 +897,7 @@ impl App {
                 track_art,
                 ..
             } = built;
+            added.extend(rows.iter().map(|r| (r.cards.clone(), 0)));
             self.rows().extend(rows);
             self.load_art(card_art, track_art, generation);
         }
@@ -887,9 +906,9 @@ impl App {
         self.state.borrow_mut().page = page;
         // Once the page holds their cards' artwork.
         for row in lazy_rows {
-            self.load_grid(row);
+            self.load_grid(row, 0..0);
         }
-        self.mark_pins();
+        self.mark_cards(added.into_iter());
         self.header_changed();
         self.follow_more(route, generation, more);
     }
@@ -960,5 +979,19 @@ mod tests {
     fn lazy_grids_keep_art_a_little_past_the_screen() {
         assert_eq!(grid_keeps(80, 160), 60..180);
         assert_eq!(grid_keeps(0, 40), 0..50, "none before the first");
+    }
+
+    #[test]
+    fn pins_keep_library_still_where_slint_does_not() {
+        assert_eq!(pins_scroll(true, 0.0, 300.0), None, "at the top they show");
+        assert_eq!(pins_scroll(true, -20.0, 300.0), Some(-320.0));
+        assert_eq!(
+            pins_scroll(true, -20.0, 0.0),
+            Some(0.0),
+            "gone, back to the top"
+        );
+        assert_eq!(pins_scroll(true, 0.0, 0.0), None);
+        assert_eq!(pins_scroll(false, -900.0, 300.0), None, "Slint keeps it");
+        assert_eq!(pins_scroll(false, -900.0, 0.0), None);
     }
 }

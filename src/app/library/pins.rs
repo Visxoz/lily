@@ -4,8 +4,9 @@
 
 use std::{collections::HashMap, rc::Rc};
 
-use slint::{Model, SharedString};
+use slint::{Model, ModelRc, SharedString};
 
+use crate::CardItem;
 use crate::api::{Card, CardKind, Route, Section};
 use crate::app::{
     App, State,
@@ -41,14 +42,21 @@ pub(in crate::app) fn pinned_cards(pins: &Pins, sections: &[Section]) -> Vec<Car
 }
 
 impl App {
+    /// The page's own card, by the route shown, as `state.route` moves on
+    /// while the next page loads.
+    fn header_card(&self, state: &State) -> Option<Card> {
+        Card::pinning(
+            self.rows_route.borrow().as_ref()?,
+            state.page.header.as_ref()?,
+        )
+    }
+
     /// What a menu's pin acts on: the page's own from `"header"`, a song
     /// from wherever it shows, or a card on the page, in the sidebar or pinned.
     fn card_of(&self, kind: &str, id: &str) -> Option<Card> {
         let state = self.state.borrow();
         if kind == "header" {
-            // The route shown, as `state.route` moves on while the next page loads.
-            let shown = self.rows_route.borrow();
-            let mut card = Card::pinning(shown.as_ref()?, state.page.header.as_ref()?)?;
+            let mut card = self.header_card(&state)?;
             // An artist's own picture, should a card of theirs be at hand,
             // rather than its banner's centre.
             let cached = (state.page_cache.values()).flat_map(|(page, _)| &page.sections);
@@ -75,7 +83,11 @@ impl App {
     /// The menu entry pinning what a menu acts on; none signed out, as
     /// Library, where pins show, is then only a sign-in prompt.
     pub(in crate::app) fn pin_label(&self, kind: &str, id: &str) -> SharedString {
-        let header = (kind == "header").then(|| self.card_of(kind, id)).flatten();
+        let state = self.state.borrow();
+        // Without `card_of`'s look for an artist's picture.
+        let header = (kind == "header")
+            .then(|| self.header_card(&state))
+            .flatten();
         let target = match &header {
             Some(card) => Some((card.kind, card.id.as_str())),
             None => card_kind(kind).map(|k| (k, id)),
@@ -83,7 +95,6 @@ impl App {
         let Some((kind, id)) = target else {
             return SharedString::new();
         };
-        let state = self.state.borrow();
         if !state.signed_in {
             SharedString::new()
         } else if state.settings.pinned.has(kind, id) {
@@ -121,21 +132,34 @@ impl App {
 
     /// Marks Library's pinned cards, but for the Pinned row's own.
     pub(in crate::app) fn mark_pins(&self) {
+        let rows = self.rows();
+        self.mark_cards(
+            (rows.iter())
+                .filter(|r| r.section != PINNED)
+                .map(|r| (r.cards, 0)),
+        );
+    }
+
+    /// Marks which of Library's cards are pinned, in each model from the index given.
+    pub(in crate::app) fn mark_cards(
+        &self,
+        models: impl Iterator<Item = (ModelRc<CardItem>, usize)>,
+    ) {
         if self.rows_route.borrow().as_ref() != Some(&Route::Library) {
             return;
         }
         let mut marks = Vec::new();
         {
             let pins = &self.state.borrow().settings.pinned;
-            for row in self.rows().iter().filter(|r| r.section != PINNED) {
-                for i in 0..row.cards.row_count() {
-                    let Some(mut card) = row.cards.row_data(i) else {
+            for (cards, from) in models {
+                for i in from..cards.row_count() {
+                    let Some(mut card) = cards.row_data(i) else {
                         continue;
                     };
                     let pinned = card_kind(&card.kind).is_some_and(|kind| pins.has(kind, &card.id));
                     if card.pinned != pinned {
                         card.pinned = pinned;
-                        marks.push((row.cards.clone(), i, card));
+                        marks.push((cards.clone(), i, card));
                     }
                 }
             }

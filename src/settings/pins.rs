@@ -33,15 +33,13 @@ impl Serialize for Pins {
     }
 }
 
-/// One by one, so a pin that won't read loses only itself.
 impl From<Vec<serde_json::Value>> for Pins {
     fn from(saved: Vec<serde_json::Value>) -> Self {
-        saved
-            .into_iter()
-            .filter_map(|pin| match serde_json::from_value(pin).ok()? {
-                Saved::<Card, Track>::Song { song } => Some(Card::song(&song)),
-                Saved::Card(card) => Some(card),
-                Saved::Id(id) => Some(Card::bare(CardKind::Playlist, id, "")),
+        super::blocked::each_read(saved)
+            .map(|pin| match pin {
+                Saved::<Card, Track>::Song { song } => Card::song(&song),
+                Saved::Card(card) => card,
+                Saved::Id(id) => Card::bare(CardKind::Playlist, id, ""),
             })
             .collect()
     }

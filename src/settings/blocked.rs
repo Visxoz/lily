@@ -49,13 +49,18 @@ impl Serialize for Blocked {
     }
 }
 
-/// One by one, so an entry that won't read loses only itself.
+/// A saved list's entries that read, one by one, so one that won't loses only itself.
+pub(super) fn each_read<T: serde::de::DeserializeOwned>(
+    stored: Vec<serde_json::Value>,
+) -> impl Iterator<Item = T> {
+    stored
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+}
+
 impl From<Vec<serde_json::Value>> for Blocked {
     fn from(stored: Vec<serde_json::Value>) -> Self {
-        stored
-            .into_iter()
-            .filter_map(|a| serde_json::from_value(a).ok())
-            .collect()
+        each_read(stored).collect()
     }
 }
 
