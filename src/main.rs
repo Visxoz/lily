@@ -282,7 +282,7 @@ fn main() {
     });
 
     let settings = settings::Settings::load();
-    audio_cache::set_budget(settings.audio_cache_budget());
+    audio_cache::set_budget(settings::mb_bytes(settings.audio_cache_mb));
     runtime.spawn_blocking(|| {
         let cache = audio_cache::AudioCache::default();
         cache.sweep();

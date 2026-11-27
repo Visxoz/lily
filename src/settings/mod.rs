@@ -447,11 +447,6 @@ impl Settings {
         self.quality = quality;
     }
 
-    /// The audio cache's size in bytes.
-    pub fn audio_cache_budget(&self) -> u64 {
-        mb_bytes(self.audio_cache_mb)
-    }
-
     pub fn equaliser(&self) -> Option<crate::audio::eq::Gains> {
         self.equaliser.then_some(self.equaliser_gains)
     }
@@ -541,7 +536,7 @@ mod tests {
         assert_eq!(mb(r#"{"audio_cache_mb":300}"#), DEFAULT_AUDIO_CACHE_MB);
         assert_eq!(mb(r#"{"audio_cache_mb":"big"}"#), DEFAULT_AUDIO_CACHE_MB);
         assert!(AUDIO_CACHE_MB.contains(&DEFAULT_AUDIO_CACHE_MB));
-        assert_eq!(Settings::default().audio_cache_budget(), 40_000_000);
+        assert_eq!(mb_bytes(Settings::default().audio_cache_mb), 40_000_000);
     }
 
     #[test]
