@@ -94,7 +94,7 @@ impl App {
         }
         // Signed in, the History page is the account's own, fetched fresh
         // each visit; the local one stands in when plays aren't sent there.
-        let online_history = signed_in && self.state.borrow().settings.youtube_history;
+        let online_history = self.state.borrow().reports_plays();
         match route {
             Route::History if !online_history => {
                 self.show_or_empty(self.history_page(), "Songs you play will show up here.");
