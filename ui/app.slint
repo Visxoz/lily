@@ -1,7 +1,7 @@
 import { EqualiserDialog } from "dialogs/equaliser.slint";
 import { DeleteDialog, RenameDialog } from "dialogs/playlist-edit.slint";
 import { PlaylistPicker } from "dialogs/playlist-picker.slint";
-import { SettingsDialog } from "dialogs/settings.slint";
+import { BlockAiDialog, SettingsDialog } from "dialogs/settings.slint";
 import { SignInDialog } from "dialogs/sign-in.slint";
 import { LyricLine, LyricsClock, LyricsExtras, LyricWord } from "panel/lyrics.slint";
 import { Drag } from "panel/queue.slint";
@@ -216,6 +216,9 @@ export component AppWindow inherits Window {
     in property <bool> check-updates;
     in property <[string]> local-folders;
     in property <[string]> blocked-artists;
+    // Set by the switch too, so it can be put back off.
+    in-out property <bool> block-ai;
+    property <bool> block-ai-open;
     /// What the proxy row says, and the user's own proxy saved, without any
     /// password.
     in property <string> proxy-detail;
@@ -267,6 +270,7 @@ export component AppWindow inherits Window {
     callback install-update();
     callback remove-folder(index: int);
     callback unblock-artist(index: int);
+    callback set-block-ai(value: bool);
     /// Saves a proxy for the next start, or Windows' for an empty address,
     /// answering why the address won't do, or nothing.
     callback set-proxy(address: string) -> string;
@@ -357,7 +361,7 @@ export component AppWindow inherits Window {
     init => { Palette.color-scheme = root.light ? ColorScheme.light : ColorScheme.dark; }
     changed light => { Palette.color-scheme = root.light ? ColorScheme.light : ColorScheme.dark; }
 
-    property <bool> dialog-open: root.settings-open || root.sign-in-open || root.picker-open || root.eq-open || root.rename-open || root.delete-open;
+    property <bool> dialog-open: root.settings-open || root.sign-in-open || root.picker-open || root.eq-open || root.rename-open || root.delete-open || root.block-ai-open;
 
     function toggle-sidebar() {
         root.sidebar-collapsed = !root.sidebar-collapsed;
@@ -399,6 +403,11 @@ export component AppWindow inherits Window {
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(ev) => {
+            // Over Settings, which stays open beneath it.
+            if ev.text == Key.Escape && root.block-ai-open {
+                block-ai-dialog.cancel();
+                return accept;
+            }
             if ev.text == Key.Escape && root.dialog-open {
                 root.settings-open = false;
                 root.sign-in-open = false;
@@ -625,14 +634,6 @@ export component AppWindow inherits Window {
             later => { root.update-prompt = false; }
         }
 
-        Toast {
-            x: (root.width - self.width) / 2;
-            y: root.height - Theme.player-bar - self.height - self.lift;
-            limit: min(480px, root.width - 64px);
-            shown: root.toast-visible;
-            text: root.toast;
-        }
-
         if settings-linger.shown: SettingsDialog {
             settings-open <=> root.settings-open;
             eq-open <=> root.eq-open;
@@ -718,9 +719,18 @@ export component AppWindow inherits Window {
             remove-folder(i) => { root.remove-folder(i); }
             blocked-artists: root.blocked-artists;
             unblock-artist(i) => { root.unblock-artist(i); }
+            block-ai <=> root.block-ai;
+            block-ai-open <=> root.block-ai-open;
+            set-block-ai(v) => { root.set-block-ai(v); }
             set-proxy(address) => { return root.set-proxy(address); }
             release-focus => { keys.focus(); }
             sign-out => { root.sign-out(); }
+        }
+
+        block-ai-dialog := BlockAiDialog {
+            asking <=> root.block-ai-open;
+            confirm => { root.set-block-ai(true); }
+            cancelled => { root.block-ai = false; }
         }
 
         EqualiserDialog {
@@ -750,7 +760,7 @@ export component AppWindow inherits Window {
         }
 
         DeleteDialog {
-            delete-open <=> root.delete-open;
+            asking <=> root.delete-open;
             name: root.edit-title;
             confirm => { root.delete-playlist(root.edit-playlist); }
         }
@@ -762,6 +772,15 @@ export component AppWindow inherits Window {
             sign-in-open <=> root.sign-in-open;
             sign-in(cookie) => { root.sign-in(cookie); }
             sign-in-browser() => { root.sign-in-browser(); }
+        }
+
+        // Over the dialogs, so a toast from Settings shows; it takes no input.
+        Toast {
+            x: (root.width - self.width) / 2;
+            y: root.height - Theme.player-bar - self.height - self.lift;
+            limit: min(480px, root.width - 64px);
+            shown: root.toast-visible;
+            text: root.toast;
         }
     }
 }

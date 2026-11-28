@@ -1,14 +1,19 @@
 //! Blocking artists from the menus, which leaves their songs out of what
-//! plays unless chosen, and unblocking them from Settings.
+//! plays unless chosen, and unblocking them from Settings; likewise the
+//! artists the AI music list names.
 
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ModelRc, SharedString, TimerMode, VecModel};
 
 use super::pins::find_card;
 use crate::api::{ArtistRef, CardKind};
 use crate::app::{App, browse::actions::find_song};
 use crate::settings::Blocked;
+
+/// The AI music list is asked for again this long after a failure, doubling
+/// for each in a row up to a day.
+const AI_ARTISTS_RETRY: Duration = Duration::from_secs(15 * 60);
 
 impl App {
     /// The artist a menu blocks: a song's first, an artist card's, pinned
@@ -60,8 +65,7 @@ impl App {
         }
     }
 
-    /// From Settings, without a toast, which would show behind it; the row
-    /// going says as much.
+    /// From Settings, without a toast, as the row going says as much.
     pub(in crate::app) fn unblock_at(&self, index: usize) {
         let artist = (self.state.borrow().settings.blocked_artists.artists())
             .get(index)
@@ -83,26 +87,104 @@ impl App {
             .set_blocked_artists(ModelRc::new(VecModel::from(names)));
     }
 
+    /// From Settings: on once its popup is confirmed, off at once.
+    pub(in crate::app) fn set_block_ai(self: &Rc<Self>, on: bool) {
+        self.update_settings(|s| {
+            s.block_ai = on;
+            if !on {
+                s.blocked_artists.set_listed(None);
+            }
+        });
+        self.ai_artists_failures.set(0);
+        if on {
+            self.load_ai_artists(true);
+        } else {
+            self.ai_artists_timer.stop();
+            if let Some(load) = self.ai_artists_load.take() {
+                load.abort();
+            }
+        }
+    }
+
+    /// Leaves out the AI music list's artists while the setting is on, and
+    /// arms its next fetch. `asked`, from the switch, takes the list's songs
+    /// out of the queue and toasts a failure, as the user is waiting.
+    pub(in crate::app) fn load_ai_artists(self: &Rc<Self>, asked: bool) {
+        let held = {
+            let settings = &self.state.borrow().settings;
+            if !settings.block_ai {
+                return;
+            }
+            settings.blocked_artists.is_listed()
+        };
+        let load = self.spawn(crate::ai_artists::load(held), move |app, listed| {
+            // An abort misses a load already done whose `done` waits its turn.
+            if !app.state.borrow().settings.block_ai {
+                return;
+            }
+            let again = match listed {
+                Ok((listed, due)) => {
+                    // First, so Smart Shuffle's top-up after the purge honours it.
+                    (app.state.borrow_mut().settings.blocked_artists)
+                        .set_listed(Some(listed.clone()));
+                    // Only from the switch, by the list alone; refreshes leave the queue as it is.
+                    if asked {
+                        let mut only = Blocked::default();
+                        only.set_listed(Some(listed));
+                        app.leave_out_of_queue(&only);
+                    }
+                    app.ai_artists_failures.set(0);
+                    due
+                }
+                Err(e) => {
+                    log::warn!("{e}");
+                    if asked {
+                        app.toast("Couldn't get the AI music list. It will be tried again.");
+                    }
+                    let failures = app.ai_artists_failures.get();
+                    app.ai_artists_failures.set(failures + 1);
+                    (AI_ARTISTS_RETRY * 2u32.pow(failures.min(7))).min(crate::ai_artists::FRESH_FOR)
+                }
+            };
+            let weak = Rc::downgrade(app);
+            app.ai_artists_timer
+                .start(TimerMode::SingleShot, again, move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.load_ai_artists(false);
+                    }
+                });
+        });
+        if let Some(old) = self.ai_artists_load.replace(Some(load)) {
+            old.abort();
+        }
+    }
+
+    /// Takes `blocked`'s songs out of the queue, never the current one.
+    fn leave_out_of_queue(self: &Rc<Self>, blocked: &Blocked) {
+        let rows = {
+            let queue = &self.state.borrow().queue;
+            let current = queue.current_index();
+            (queue.items().enumerate())
+                .filter(|&(i, t)| Some(i) != current && blocked.has(t))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        self.queue_remove(rows);
+    }
+
     /// Takes the artist just blocked out of the queue and skips their song
     /// playing, but not one paused, which a skip would play. Only this artist.
     fn leave_out_blocked(self: &Rc<Self>, artist: ArtistRef) {
         let blocked: Blocked = [artist].into_iter().collect();
-        let (rows, playing) = {
-            let state = self.state.borrow();
-            let queue = &state.queue;
-            let current = queue.current_index();
-            let rows = (queue.items().enumerate())
-                .filter(|&(i, t)| Some(i) != current && blocked.has(t))
-                .map(|(i, _)| i)
-                .collect();
-            let playing = (queue.current())
+        // First, so the skip lands on a song kept.
+        self.leave_out_of_queue(&blocked);
+        let playing = {
+            let queue = &self.state.borrow().queue;
+            (queue.current())
                 .filter(|t| blocked.has(t))
                 .zip(queue.current_uid())
-                .map(|(t, uid)| (t.id.clone(), uid));
-            (rows, playing)
+                .map(|(t, uid)| (t.id.clone(), uid))
         };
-        // First, so the skip lands on a song kept.
-        self.queue_remove(rows);
         let Some((id, uid)) = playing else { return };
         if self.player.is_paused() || self.stopped() {
             // So its autoplay radio doesn't follow it; a later one leaves the artist out.

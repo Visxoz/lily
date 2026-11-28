@@ -3,7 +3,7 @@
 //! dropped on signing in or out.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -41,13 +41,19 @@ fn renewed_path() -> PathBuf {
 /// How long until the sign-in is due a renewal, `every` after the last one
 /// of any run.
 pub fn renewal_due(every: Duration) -> Duration {
-    let renewed = std::fs::metadata(renewed_path()).and_then(|m| m.modified());
-    due_after(renewed.ok(), SystemTime::now(), every)
+    time_left(&renewed_path(), every)
 }
 
-fn due_after(renewed: Option<SystemTime>, now: SystemTime, every: Duration) -> Duration {
+/// How long until the file at `path` was modified `every` ago; none once it
+/// was, or should it be missing.
+pub fn time_left(path: &Path, every: Duration) -> Duration {
+    let at = std::fs::metadata(path).and_then(|m| m.modified());
+    due_after(at.ok(), SystemTime::now(), every)
+}
+
+fn due_after(modified: Option<SystemTime>, now: SystemTime, every: Duration) -> Duration {
     // One ahead of now was kept under a clock since put back, so says nothing.
-    renewed
+    modified
         .and_then(|at| now.duration_since(at).ok())
         .map_or(Duration::ZERO, |since| every.saturating_sub(since))
 }

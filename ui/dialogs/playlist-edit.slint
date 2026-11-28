@@ -1,7 +1,6 @@
 import { LineEdit } from "std-widgets.slint";
-import { Theme } from "../theme.slint";
 import { PillButton } from "../widgets/buttons.slint";
-import { Dialog } from "dialog.slint";
+import { ConfirmDialog, Dialog } from "dialog.slint";
 
 /// Renames one of the account's own playlists, starting from the name as it is.
 export component RenameDialog inherits Dialog {
@@ -47,37 +46,9 @@ export component RenameDialog inherits Dialog {
 }
 
 /// Asks before deleting one of the account's own playlists.
-export component DeleteDialog inherits Dialog {
-    in-out property <bool> delete-open;
+export component DeleteDialog inherits ConfirmDialog {
     in property <string> name;
-    callback confirm();
-
     title: "Delete playlist";
-    dialog-width: 420px;
-    open: root.delete-open;
-    close => { root.delete-open = false; }
-    Text {
-        text: "Delete “" + root.name + "”? This can't be undone.";
-        wrap: word-wrap;
-        font-size: 14px;
-        color: Theme.text-secondary;
-    }
-
-    HorizontalLayout {
-        alignment: end;
-        spacing: 12px;
-        PillButton {
-            text: "Cancel";
-            clicked => { root.delete-open = false; }
-        }
-
-        PillButton {
-            text: "Delete";
-            primary: true;
-            clicked => {
-                root.delete-open = false;
-                root.confirm();
-            }
-        }
-    }
+    message: "Delete “" + root.name + "”? This can't be undone.";
+    action: "Delete";
 }

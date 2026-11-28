@@ -12,9 +12,9 @@ mod session;
 
 pub use account::{
     load_home, load_library, load_visitor, remove_account_data, renewal_due, save_home,
-    save_library, save_renewal, save_visitor,
+    save_library, save_renewal, save_visitor, time_left,
 };
-pub use blocked::Blocked;
+pub use blocked::{Blocked, Listed};
 pub use files::{
     HISTORY_SAVES, SESSION_SAVES, data_dir, move_data_dir, partial, prune, remove_old_cookie,
     touch, write_atomic, write_atomic_parts,
@@ -284,6 +284,8 @@ pub struct Settings {
     /// Artists whose songs play only when chosen, for every account on this
     /// PC; YouTube is never told.
     pub blocked_artists: Blocked,
+    /// Leaves out the artists a community list names as making AI music.
+    pub block_ai: bool,
 }
 
 /// Older versions kept `normalise` as on or off, which is Normal or Off.
@@ -393,6 +395,7 @@ impl Default for Settings {
             account_photo: None,
             pinned: Pins::default(),
             blocked_artists: Blocked::default(),
+            block_ai: false,
         }
     }
 }
@@ -520,6 +523,7 @@ mod tests {
         assert!(!settings.crossfade, "off until chosen");
         assert!(!settings.automix, "off until chosen");
         assert!(!settings.albums_by_artist, "YouTube's order until chosen");
+        assert!(!settings.block_ai, "off until chosen");
         assert!(
             CROSSFADE_SECS.contains(&settings.crossfade_secs),
             "a length Settings offers"

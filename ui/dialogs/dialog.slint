@@ -1,5 +1,5 @@
 import { Icons, Theme } from "../theme.slint";
-import { IconButton } from "../widgets/buttons.slint";
+import { IconButton, PillButton } from "../widgets/buttons.slint";
 import { Toggle } from "../widgets/toggle.slint";
 
 /// A modal card that fades and scales in, and out again once `open` is
@@ -77,6 +77,53 @@ export component Dialog inherits Rectangle {
     }
 }
 
+/// Asks before `action`, closing before `confirm` runs; clicks while it fades out do nothing.
+export component ConfirmDialog inherits Dialog {
+    in-out property <bool> asking;
+    in property <string> message;
+    in property <string> action;
+    callback confirm();
+    /// Closed without the action.
+    callback cancelled();
+
+    public function cancel() {
+        if root.asking {
+            root.asking = false;
+            root.cancelled();
+        }
+    }
+
+    dialog-width: 420px;
+    open: root.asking;
+    close => { root.cancel(); }
+    Text {
+        text: root.message;
+        wrap: word-wrap;
+        font-size: 14px;
+        color: Theme.text-secondary;
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        spacing: 12px;
+        PillButton {
+            text: "Cancel";
+            clicked => { root.cancel(); }
+        }
+
+        PillButton {
+            text: root.action;
+            primary: true;
+            clicked => {
+                if root.asking {
+                    root.asking = false;
+                    root.confirm();
+                }
+            }
+        }
+    }
+}
+
 export component SettingRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> detail;
@@ -121,11 +168,11 @@ export component SettingRow inherits HorizontalLayout {
 }
 
 export component ToggleRow inherits SettingRow {
-    in property <bool> checked;
+    in-out property <bool> checked;
     callback toggled(bool);
     Toggle {
         y: (parent.height - self.height) / 2;
-        checked: root.checked;
+        checked <=> root.checked;
         toggled(v) => { root.toggled(v); }
     }
 }

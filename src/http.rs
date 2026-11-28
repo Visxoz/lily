@@ -345,6 +345,22 @@ pub fn lyrics_client() -> &'static reqwest::Client {
     })
 }
 
+/// Where the list of artists making AI-generated music is kept.
+const AI_ARTISTS_HOSTS: &[&str] = &["raw.githubusercontent.com"];
+
+/// For that list.
+pub fn ai_artists_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        site_client(
+            crate::scrobbling::USER_AGENT,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            AI_ARTISTS_HOSTS,
+        )
+    })
+}
+
 /// Sends `request` and reads its answer as text, failing on an error status.
 /// Errors start with `what` and leave out the URL, as premium.log keeps none.
 pub async fn text(request: reqwest::RequestBuilder, what: &str) -> Result<String, String> {

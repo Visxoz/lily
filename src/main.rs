@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod ai_artists;
 mod api;
 mod app;
 mod audio;

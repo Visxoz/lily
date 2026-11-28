@@ -126,7 +126,7 @@ flowchart LR
 
 Most YouTube clients get stream URLs that YouTube's player JavaScript has to unscramble. The visionOS client gets plain ones, so the app asks as that client and needs no JavaScript engine, falling back to Android VR and iOS if YouTube changes it. With Premium, the app unscrambles the web player's URLs itself, in a short-lived QuickJS context with a cut-down copy of the player.
 
-The app talks only to YouTube's hosts, checked against an allowlist, plus GitHub for updates, Apple Music's and Spotify's for moving covers, Better Lyrics' hub, lrc.red, LRCLIB and KuGou (Tencent Music, in China) for lyrics (sent a song's title, artist and length while lyrics are open, and the hub its video ID too; KuGou only when the others have no word timing), and Last.fm and ListenBrainz if you connect them.
+The app talks only to YouTube's hosts, checked against an allowlist, plus GitHub for updates (and, with **Block AI music** on, for the list of AI artists), Apple Music's and Spotify's for moving covers, Better Lyrics' hub, lrc.red, LRCLIB and KuGou (Tencent Music, in China) for lyrics (sent a song's title, artist and length while lyrics are open, and the hub its video ID too; KuGou only when the others have no word timing), and Last.fm and ListenBrainz if you connect them.
 
 It follows a proxy set by hand in Windows' settings, or one of your own in **Settings ▸ About**, used from Lily's next start, and keeps everything in `%APPDATA%\Lily`.
 
@@ -157,6 +157,8 @@ Every release is built by [GitHub Actions](.github/workflows/release.yml), never
 Lily is free software under the [GNU General Public License, version 3](LICENSE). It builds on [rustypipe](https://codeberg.org/ThetaDev/rustypipe), which is GPL-3.0, and on [Slint](https://slint.dev) under its GPL-3.0 option.
 
 Lyrics come partly from [Better Lyrics](https://github.com/better-lyrics/better-lyrics)' lyrics hub. Thanks to Better Lyrics for it.
+
+**Block AI music** in **Settings ▸ Library** uses the list of AI artists from [spotify-ai-blocker](https://github.com/CennoxX/spotify-ai-blocker), which includes [loved.music](https://loved.music)'s AI Artists list under CC BY 4.0. Thanks to both.
 
 <br>
 

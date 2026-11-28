@@ -4,6 +4,7 @@
 use std::{
     collections::HashSet,
     hash::{DefaultHasher, Hasher},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,32 @@ pub struct Blocked {
     ids: HashSet<String>,
     /// Names by `name_key`, as some rows carry no ID and others an alias's.
     names: HashSet<u64>,
+    /// Set each run, never saved.
+    listed: Option<Listed>,
+}
+
+/// Artists named on a list, by `name_key` alone, sorted: about half a
+/// `HashSet`'s memory. Two names sharing a 64-bit hash is a risk accepted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listed(Arc<[u64]>);
+
+impl<'a> FromIterator<&'a str> for Listed {
+    fn from_iter<I: IntoIterator<Item = &'a str>>(names: I) -> Self {
+        let mut keys: Vec<u64> = names.into_iter().map(name_key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        Self(keys.into())
+    }
+}
+
+impl Listed {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn has(&self, key: u64) -> bool {
+        self.0.binary_search(&key).is_ok()
+    }
 }
 
 fn folded(name: &str) -> impl Iterator<Item = char> + '_ {
@@ -39,6 +66,7 @@ impl FromIterator<ArtistRef> for Blocked {
             ids: artists.iter().filter_map(|a| a.id.clone()).collect(),
             names: artists.iter().map(|a| name_key(&a.name)).collect(),
             artists,
+            listed: None,
         }
     }
 }
@@ -60,17 +88,43 @@ impl Blocked {
         &self.artists
     }
 
-    /// The same artist by ID or by name.
-    pub fn matches(&self, artist: &ArtistRef) -> bool {
-        artist.id.as_ref().is_some_and(|id| self.ids.contains(id))
-            || (self.names.contains(&name_key(&artist.name))
-                // A hash alone could collide.
-                && (self.artists.iter()).any(|b| folded(&b.name).eq(folded(&artist.name))))
+    /// Songs by the list's artists are left out too, as the user's own are.
+    pub fn set_listed(&mut self, listed: Option<Listed>) {
+        self.listed = listed;
     }
 
-    /// Whether any of the song's artists is blocked.
+    pub fn is_listed(&self) -> bool {
+        self.listed.is_some()
+    }
+
+    fn blocks_none(&self) -> bool {
+        self.artists.is_empty() && self.listed.is_none()
+    }
+
+    /// The same artist by ID or by name, among those the user blocked.
+    pub fn matches(&self, artist: &ArtistRef) -> bool {
+        self.matches_id(artist) || self.matches_name(artist, name_key(&artist.name))
+    }
+
+    fn matches_id(&self, artist: &ArtistRef) -> bool {
+        artist.id.as_ref().is_some_and(|id| self.ids.contains(id))
+    }
+
+    fn matches_name(&self, artist: &ArtistRef, key: u64) -> bool {
+        self.names.contains(&key)
+            // A hash alone could collide.
+            && (self.artists.iter()).any(|b| folded(&b.name).eq(folded(&artist.name)))
+    }
+
+    /// Whether any of the song's artists is blocked or listed.
     pub fn has(&self, track: &Track) -> bool {
-        !self.artists.is_empty() && track.artists.iter().any(|a| self.matches(a))
+        !self.blocks_none()
+            && track.artists.iter().any(|a| {
+                self.matches_id(a) || {
+                    let key = name_key(&a.name);
+                    self.matches_name(a, key) || self.listed.as_ref().is_some_and(|l| l.has(key))
+                }
+            })
     }
 
     /// Blocks `artist`, or unblocks it, returning whether it is now blocked.
@@ -83,14 +137,16 @@ impl Blocked {
             let unblocked: Self = [artist].into_iter().collect();
             artists.retain(|a| !unblocked.matches(a));
         }
+        let listed = self.listed.take();
         *self = artists.into_iter().collect();
+        self.listed = listed;
         blocking
     }
 
-    /// Leaves out blocked artists' songs but the one at `chosen`, returning
-    /// its new index.
+    /// Leaves out blocked and listed artists' songs but the one at `chosen`,
+    /// returning its new index.
     pub fn leave_out(&self, tracks: &mut Vec<Track>, chosen: Option<usize>) -> Option<usize> {
-        if self.artists.is_empty() {
+        if self.blocks_none() {
             return chosen;
         }
         let (mut at, mut kept, mut index) = (0, 0, None);
@@ -162,6 +218,27 @@ mod tests {
             "unblocked by ID"
         );
         assert!(blocked.artists().is_empty() && !blocked.has(&by_id));
+    }
+
+    #[test]
+    fn listed_artists_are_left_out_but_never_blocked_or_saved() {
+        let mut blocked = Blocked::default();
+        blocked.set_listed(Some(["Aria Vale"].into_iter().collect()));
+        let listed = by("a", Some("UC1"), "ARIA VALE");
+        let other = by("b", None, "Pond");
+        assert!(blocked.has(&listed), "by name, whatever its case");
+        assert!(!blocked.has(&other));
+        let mut kept = vec![listed.clone(), other, listed.clone()];
+        assert_eq!(blocked.leave_out(&mut kept, Some(2)), Some(1));
+        assert_eq!(
+            kept.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+        assert!(!blocked.matches(&listed.artists[0]), "menus block it still");
+        assert!(blocked.toggle(listed.artists[0].clone()));
+        assert!(!blocked.toggle(listed.artists[0].clone()));
+        assert!(blocked.has(&listed), "toggling keeps the list");
+        assert_eq!(serde_json::to_string(&blocked).unwrap(), "[]");
     }
 
     #[test]

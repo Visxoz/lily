@@ -136,6 +136,7 @@ impl App {
             app.update_settings(|s| s.animated_art = value);
             app.refresh_motion();
         });
+        on!(on_set_block_ai, |app, value| app.set_block_ai(value));
         on!(on_spotify_sign_in, |app| app.sign_in_to_spotify());
         on!(on_spotify_sign_out, |app| app.sign_out_of_spotify());
         on!(on_set_discord, |app, value| {

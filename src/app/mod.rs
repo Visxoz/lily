@@ -24,7 +24,7 @@ use std::{
 };
 
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
-use tokio::runtime::Handle;
+use tokio::{runtime::Handle, task::AbortHandle};
 
 use crate::{
     AccentChoice, Api as ApiGlobal, AppWindow, CardItem, MiniPlayer, QueueItem, RowItem,
@@ -101,6 +101,12 @@ pub struct App {
     update: RefCell<Option<update::Update>>,
     update_timer: Timer,
     cookie_timer: Timer,
+    /// Fetches the AI music list again once a day, or after a failure.
+    ai_artists_timer: Timer,
+    /// Failed fetches of it in a row, which lengthen the wait.
+    ai_artists_failures: Cell<u32>,
+    /// The load in flight, aborted as another starts or the switch goes off.
+    ai_artists_load: Cell<Option<AbortHandle>>,
     persist_timer: Timer,
     /// Retries scrobbles a service could not take.
     scrobble_timer: Timer,
@@ -253,6 +259,9 @@ impl App {
             update: RefCell::new(None),
             update_timer: Timer::default(),
             cookie_timer: Timer::default(),
+            ai_artists_timer: Timer::default(),
+            ai_artists_failures: Cell::new(0),
+            ai_artists_load: Cell::new(None),
             persist_timer: Timer::default(),
             scrobble_timer: Timer::default(),
             home_ahead: RefCell::new(home_ahead),
@@ -269,6 +278,8 @@ impl App {
         app.bind(ui);
         app.attach_tray();
         app.apply_settings_to_ui(ui);
+        // Once, as the switch then holds it; it goes on only once its popup is confirmed.
+        ui.set_block_ai(app.state.borrow().settings.block_ai);
         ui.set_spotify_signed_in(app.motion.spotify_signed_in());
         let proxy = crate::http::proxy_in_use();
         ui.set_proxy_detail(proxy_detail(proxy.is_some(), false).into());
@@ -373,6 +384,8 @@ impl App {
     pub fn start(self: &Rc<Self>) {
         images::set_scale(self.ui().window().scale_factor());
         self.restore_session();
+        // At once, from the copy kept however old, so the first plays leave them out.
+        self.load_ai_artists(false);
         // Files deleted while the app was closed.
         self.local_files_changed();
         let app = Rc::clone(self);

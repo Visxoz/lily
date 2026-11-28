@@ -155,7 +155,7 @@ impl App {
     fn play_queue(self: &Rc<Self>, mut tracks: Vec<Track>, start: Option<usize>) {
         let start = (self.state.borrow().settings.blocked_artists).leave_out(&mut tracks, start);
         if tracks.is_empty() {
-            self.toast("Every song here is by an artist you've blocked");
+            self.toast("Every song here is by a blocked artist");
             return;
         }
         {

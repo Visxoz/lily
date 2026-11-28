@@ -5,7 +5,7 @@ import { ListView } from "../widgets/list.slint";
 import { MenuEntry, PopupMenu } from "../widgets/menu.slint";
 import { Slider } from "../widgets/slider.slint";
 import { Toggle } from "../widgets/toggle.slint";
-import { Dialog, SettingRow, ToggleRow } from "dialog.slint";
+import { ConfirmDialog, Dialog, SettingRow, ToggleRow } from "dialog.slint";
 
 component Swatch inherits Rectangle {
     in property <brush> fill;
@@ -170,15 +170,16 @@ component SectionTabs inherits Rectangle {
     }
 }
 
-/// Names, each with a button taking it out, scrolling past four rows less what
-/// the tab's `other` list takes (two at most), so the tab stays no taller.
+/// Names, each with a button taking it out, scrolling past three rows less
+/// what the tab's `other` list takes (one and a half at most), so the tab
+/// stays no taller.
 component RemovableList {
     in property <[string]> names;
     /// How many names the other list holds.
     in property <int> other;
     callback remove(index: int);
     property <length> line: 40px;
-    height: min((4 - min(root.other, 2)) * root.line, root.names.length * root.line);
+    height: min((3 - min(root.other, 1.5)) * root.line, root.names.length * root.line);
     list := ListView {
         width: 100%;
         height: 100%;
@@ -265,6 +266,8 @@ export component SettingsDialog inherits Dialog {
     in property <bool> listenbrainz-connecting;
     in property <[string]> local-folders;
     in property <[string]> blocked-artists;
+    in-out property <bool> block-ai;
+    in-out property <bool> block-ai-open;
     in property <string> proxy-detail;
     /// The saved proxy without any password, or none.
     in property <string> proxy-address;
@@ -300,6 +303,7 @@ export component SettingsDialog inherits Dialog {
     callback add-folder();
     callback remove-folder(index: int);
     callback unblock-artist(index: int);
+    callback set-block-ai(value: bool);
     callback set-proxy(address: string) -> string;
     /// The address field going with its tab or the dialog, which would
     /// otherwise leave the window's keys with nothing focused.
@@ -501,6 +505,20 @@ export component SettingsDialog inherits Dialog {
             names: root.local-folders;
             other: root.blocked-artists.length;
             remove(i) => { root.remove-folder(i); }
+        }
+
+        ToggleRow {
+            label: "Block AI music";
+            detail: "Experimental. Leaves out songs by artists on a community list.";
+            // Two-way, so a cancelled popup can put it back off.
+            checked <=> root.block-ai;
+            toggled(v) => {
+                if v {
+                    root.block-ai-open = true;
+                } else {
+                    root.set-block-ai(false);
+                }
+            }
         }
 
         SettingRow {
@@ -721,4 +739,11 @@ export component SettingsDialog inherits Dialog {
             wrap: word-wrap;
         }
     }
+}
+
+/// Asks before Block AI music turns on.
+export component BlockAiDialog inherits ConfirmDialog {
+    title: "Block AI music";
+    message: "This is experimental. Songs by artists on a community list of AI-generated music are left out of queues, radios and shuffles, matched by name. The list comes from a third party, not from Lily, and Lily can't check it: it may name real artists, and anyone sharing a listed artist's name is left out too. A song you pick to play still plays.";
+    action: "Turn on";
 }
